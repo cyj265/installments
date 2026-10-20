@@ -1,0 +1,31 @@
+# 构建产物与本地缓存：可由 gradlew 随时重建，入库只会让历史变胖
+*.iml
+.gradle
+.kotlin
+/build
+app/build
+/captures
+.externalNativeBuild
+.cxx
+.DS_Store
+
+# 机器相关路径，换一台机器就无效。这里写的是 sdk.dir，虽然不含口令，但绝不能进版本库
+local.properties
+/local.properties
+
+# IDE 与编辑器本地状态
+/.idea
+.vscode
+
+# 签名材料：一旦进了 git 历史就永远删不掉，任何人都能签出同名包冒充更新
+*.jks
+*.keystore
+keystore.properties
+
+# 本地打出来的包（发给别人测试用的产物不入库，走 Release）
+*.apk
+
+# 本地构建日志与 JVM 崩溃转储
+*.log
+hs_err*.log
+replay_pid*.log
