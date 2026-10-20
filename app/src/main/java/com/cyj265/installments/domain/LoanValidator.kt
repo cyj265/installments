@@ -59,7 +59,7 @@ object LoanValidator {
         return findings
     }
 
-    fun validateLoan(loan: Loan): List<Finding> {
+    fun validateLoan(loan: Loan, today: LocalDate = LocalDate.now()): List<Finding> {
         val findings = mutableListOf<Finding>()
 
         if (loan.perPeriodAmountCents <= 0L) {
@@ -94,6 +94,17 @@ object LoanValidator {
             findings += warn(null, "第 $firstUnpaid 期未标记已还，但第 $lastPaid 期已还，中间第 ${holes.joinToString("、")} 期可能漏记")
         }
 
+        // 「已还」的期排在今天之后，只可能是「当前期」和「下期还款日」互相矛盾：
+        // 计划表是从下期往回倒推的，两个输入对不上，整条时间轴就整体错位。
+        val futurePaid = loan.periods.filter { it.paid && it.dueDate.isAfter(today) }
+        if (futurePaid.isNotEmpty()) {
+            findings += warn(
+                "nextDueDate",
+                "第 ${futurePaid.joinToString("、") { "${it.index} 期（${it.dueDate}）" }} 标成已还，但应还日还没到。" +
+                    "「当前期」和「下期还款日」对不上，计划表被整体倒推错位了——把「下期还款日」清空、只留每月几号，让 App 重新推"
+            )
+        }
+
         val sorted = loan.periods.sortedBy { it.index }
         for (i in 1 until sorted.size) {
             val months = ChronoUnit.MONTHS.between(sorted[i - 1].dueDate, sorted[i].dueDate)
@@ -120,8 +131,9 @@ object LoanValidator {
                         "未还本金比剩余应还合计少正好一期（${Money.format(gap)}），很可能把「剩余期数」读少了一期"
                     )
                 }
-                if (principal in 1 until loan.perPeriodAmountCents) {
-                    findings += warn("principalOutstanding", "未还本金 ${Money.format(principal)} 小于单期金额，像是把尾期金额当成了本金")
+                // 只剩一期时「未还本金 ≈ 单期金额」本来就成立；16000÷3 那种差 1 分的尾差也不该弹黄条
+                if (loan.unpaidPeriods.size > 1 && principal in 1 until (loan.perPeriodAmountCents - 100L)) {
+                    findings += warn("principalOutstanding", "未还本金 ${Money.format(principal)} 比单期金额还小，像是把尾期金额当成了本金")
                 }
             }
         }

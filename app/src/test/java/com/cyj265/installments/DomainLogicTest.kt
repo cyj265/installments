@@ -146,6 +146,43 @@ class LoanValidatorTest {
         assertEquals(FindingLevel.ERROR, finding.level)
     }
 
+    // 真机案例：账单分期 3 期、序号 0004。「当前期 3」和「下期 2026-12-09」互相矛盾，
+    // 计划表从下期往回倒推，第 2 期就落到了还没来的 11-09，却被前缀规则标成已还。
+    private val oct20 = LocalDate.of(2026, 10, 20)
+
+    private fun tailDraft() = InstallmentDraft(
+        institution = "某银行信用卡",
+        loanNo = "0004",
+        totalPeriods = 3,
+        currentPeriod = 3,
+        perPeriodAmount = "5333.34",
+        principalOutstanding = "5333.33",
+        dueDayOfMonth = 9,
+        nextDueDate = "2026-12-09",
+    )
+
+    @Test fun flagsPaidPeriodDatedInTheFuture() {
+        val loan = LoanAssembler.fromDraft(tailDraft(), now = oct20)
+        val finding = LoanValidator.validateLoan(loan, today = oct20).first { it.field == "nextDueDate" }
+        assertEquals(FindingLevel.WARN, finding.level)
+        assertTrue(finding.message.contains("还没到"))
+    }
+
+    @Test fun clearingNextDueDateRealignsTheSchedule() {
+        val loan = LoanAssembler.fromDraft(tailDraft().copy(nextDueDate = null), now = oct20)
+        assertEquals(
+            listOf("2026-09-09", "2026-10-09", "2026-11-09"),
+            loan.periods.map { it.dueDate.toString() },
+        )
+        assertFalse(LoanValidator.validateLoan(loan, today = oct20).any { it.field == "nextDueDate" })
+    }
+
+    // 16000÷3 每期 5333.34、尾期本金 5333.33：只剩一期时本金≈单期本来就成立，不该弹黄条
+    @Test fun lastPeriodPrincipalIsNotFlagged() {
+        val loan = LoanAssembler.fromDraft(tailDraft(), now = oct20)
+        assertFalse(LoanValidator.validateLoan(loan, today = oct20).any { it.field == "principalOutstanding" })
+    }
+
     @Test fun draftMissingTotalPeriodsIsError() {
         val findings = LoanValidator.validateDraft(draft().copy(totalPeriods = null))
         assertTrue(findings.hasError())
