@@ -161,7 +161,7 @@ class VisionRecognizer(private val settings: SettingsStore) {
          * 真正发给模型的那段话。公开它是因为「我的」页要原样显示并允许复制——
          * 没有 Key、手动去问模型的人拿的是同一段指令，两处一旦分叉，粘回来的 JSON 就对不上校验规则。
          */
-        const val PROMPT = """你是分期还款台账录入员。只看这张截图上明确出现的内容，把它们抄成 JSON，不要推测、不要计算、不要补全截图上没有的数字。
+        const val PROMPT = """你是分期还款台账录入员。只看这些截图上明确出现的内容，把它们抄成 JSON，不要推测、不要计算、不要补全截图上没有的数字。
 
 只输出一个 JSON 对象，形如：
 {"records":[{"institution":"支付宝花呗","loanNo":"****3271","totalPeriods":12,"currentPeriod":5,"perPeriodAmount":"680.00","principalOutstanding":"4760.00","dueDayOfMonth":28,"nextDueDate":"2026-10-28","paidPeriods":[1,2,3,4],"note":"截图原文里的备注"}]}
