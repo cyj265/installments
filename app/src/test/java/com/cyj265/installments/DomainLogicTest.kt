@@ -67,6 +67,36 @@ class LoanAssemblerTest {
         assertEquals(544000L, loan.remainingPayableCents)
     }
 
+    // 手填「每月几号」时，本期要锚在还没到的那一天，否则还款日一过，第一格就是逾期
+    @Test fun dueDayAloneAnchorsToNextOccurrence() {
+        val loan = LoanAssembler.fromDraft(
+            huabei.copy(nextDueDate = null, currentPeriod = 1, totalPeriods = 6),
+            now = LocalDate.of(2026, 10, 20),
+        )
+        assertEquals(LocalDate.of(2026, 10, 28), loan.firstDueDate)
+        assertEquals(LocalDate.of(2027, 3, 28), loan.periods.last().dueDate)
+    }
+
+    @Test fun dueDayAlreadyPassedRollsToNextMonth() {
+        val today = LocalDate.of(2026, 10, 20)
+        val loan = LoanAssembler.fromDraft(
+            huabei.copy(nextDueDate = null, dueDayOfMonth = 10, currentPeriod = 1, totalPeriods = 3),
+            now = today,
+        )
+        assertEquals(LocalDate.of(2026, 11, 10), loan.firstDueDate)
+        assertFalse(loan.isOverdue(today))
+    }
+
+    // 锚点定的是「本期」，第 1 期要按 currentPeriod 往前推，否则已还的期数会全跑到未来
+    @Test fun dueDayAloneStillBackdatesPaidPeriods() {
+        val loan = LoanAssembler.fromDraft(
+            huabei.copy(nextDueDate = null, currentPeriod = 5),
+            now = LocalDate.of(2026, 10, 20),
+        )
+        assertEquals(LocalDate.of(2026, 6, 28), loan.firstDueDate)
+        assertEquals(4, loan.paidCount)
+    }
+
     @Test fun explicitPaidPeriodsOverridePrefixRule() {
         val loan = LoanAssembler.fromDraft(huabei.copy(paidPeriods = listOf(1, 2, 4)))
         assertEquals(listOf(1, 2, 4), loan.periods.filter { it.paid }.map { it.index })
@@ -145,6 +175,16 @@ class LoanValidatorTest {
 
     @Test fun draftFlagsUnreadableDueDate() {
         val findings = LoanValidator.validateDraft(draft().copy(nextDueDate = "下个月"))
+        assertEquals("nextDueDate", findings.first { it.level == FindingLevel.ERROR }.field)
+    }
+
+    // 交行的分期详情页就没有还款日那一栏，能填的只有「每月几号」，这条路必须走得通
+    @Test fun draftAcceptsDueDayAloneWithoutFullDate() {
+        assertFalse(LoanValidator.validateDraft(draft().copy(nextDueDate = null)).hasError())
+    }
+
+    @Test fun draftFlagsWhenNeitherDateNorDayIsKnown() {
+        val findings = LoanValidator.validateDraft(draft().copy(nextDueDate = null, dueDayOfMonth = null))
         assertEquals("nextDueDate", findings.first { it.level == FindingLevel.ERROR }.field)
     }
 

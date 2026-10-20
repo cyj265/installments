@@ -39,10 +39,15 @@ object LoanValidator {
             findings += error("currentPeriod", "当前期 $current 大于总期数 $total")
         }
         val dueDate = draft.nextDueDateParsed
-        if (dueDate == null) {
-            findings += error("nextDueDate", "没读到可用的还款日")
-        }
         val day = draft.dueDayOfMonth
+        val rawDueDate = draft.nextDueDate?.trim()
+        if (dueDate == null && !rawDueDate.isNullOrEmpty()) {
+            findings += error("nextDueDate", "还款日「$rawDueDate」读不出日期，改成 YYYY-MM-DD，或清空它、只填「还款日」的每月几号")
+        } else if (dueDate == null && day == null) {
+            // 交行这类分期详情页压根不显示还款日，只有账单日固定这件事是确定的。
+            // 只认完整日期会把人逼去猜一个 YYYY-MM-DD，而「每月 25 日」才是他真正知道的东西。
+            findings += error("nextDueDate", "没读到还款日。截图上没有也没关系，在「还款日」里填每月几号即可，剩余期数会按月推算")
+        }
         if (day != null && day !in 1..31) {
             findings += error("dueDayOfMonth", "还款日 $day 不在 1–31 之间")
         } else if (day != null && dueDate != null && day != dueDate.dayOfMonth) {

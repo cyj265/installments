@@ -136,9 +136,18 @@ private fun DraftCard(
         FieldRow("未还本金", draft.principalOutstanding ?: "", errorFields.contains("principalOutstanding")) { v ->
             viewModel.updateDraft(index, draft.copy(principalOutstanding = v))
         }
-        IntFieldRow("还款日", draft.dueDayOfMonth, errorFields.contains("dueDayOfMonth")) { v -> viewModel.updateDraft(index, draft.copy(dueDayOfMonth = v)) }
-        FieldRow("下期还款日", draft.nextDueDate ?: "", errorFields.contains("nextDueDate")) { v ->
+        IntFieldRow("还款日", draft.dueDayOfMonth, errorFields.contains("dueDayOfMonth"), placeholder = "每月几号") { v -> viewModel.updateDraft(index, draft.copy(dueDayOfMonth = v)) }
+        FieldRow("下期还款日", draft.nextDueDate ?: "", errorFields.contains("nextDueDate"), placeholder = "可留空，如 2026-11-10") { v ->
             viewModel.updateDraft(index, draft.copy(nextDueDate = v.trim().takeIf { s -> s.isNotEmpty() }))
+        }
+
+        // 只填「每月几号」时，具体日期是推算出来的；不摊开给人看，就没法确认推的是不是那个月
+        if (draft.nextDueDateParsed == null && draft.dueDayOfMonth != null && assembled.periods.isNotEmpty()) {
+            AlertBox(
+                text = "按每月 ${draft.dueDayOfMonth} 日推算：下期 ${assembled.nextUnpaid?.dueDate ?: "无"}，末期 ${assembled.periods.last().dueDate}。对不上就改「还款日」，或直接填完整日期。",
+                kind = ChipKind.NEUTRAL,
+                modifier = Modifier.padding(top = 10.dp),
+            )
         }
 
         // 实测：银行 App 的「借款详情」这一屏往往只有本金和总期数，每期金额与还款日在「查看还款计划」里。
@@ -233,19 +242,20 @@ private fun DupAlert(existing: Loan, reason: String) {
 }
 
 @Composable
-private fun FieldRow(label: String, value: String, warn: Boolean, onValueChange: (String) -> Unit) {
+private fun FieldRow(label: String, value: String, warn: Boolean, placeholder: String = "未识别到", onValueChange: (String) -> Unit) {
     FqField(
         label = label,
         value = value,
         onValueChange = onValueChange,
         warning = warn,
+        placeholder = placeholder,
         trailing = "AI",
     )
 }
 
 @Composable
-private fun IntFieldRow(label: String, value: Int?, warn: Boolean, onValueChange: (Int?) -> Unit) {
-    FieldRow(label, value?.toString() ?: "", warn) { raw ->
+private fun IntFieldRow(label: String, value: Int?, warn: Boolean, placeholder: String = "未识别到", onValueChange: (Int?) -> Unit) {
+    FieldRow(label, value?.toString() ?: "", warn, placeholder) { raw ->
         onValueChange(raw.filter { it.isDigit() }.toIntOrNull())
     }
 }

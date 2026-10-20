@@ -27,7 +27,13 @@ object LoanAssembler {
         val perPeriod = Money.parseCents(draft.perPeriodAmount) ?: 0L
         val nextDue = draft.nextDueDateParsed
         val dueDay = draft.dueDayOfMonth ?: nextDue?.dayOfMonth ?: 1
-        val firstDue = if (nextDue != null) nextDue.minusMonths((current - 1).toLong()) else now.withDayOfMonth(dueDay.coerceIn(1, 28))
+        // 只给了「每月几号」时，把本期锚在最近一个还没到的那天，再往前推回第 1 期。
+        // 直接用本月那天，一旦还款日已经过去，入库第一格就是逾期。
+        val anchor = nextDue ?: run {
+            val thisMonth = now.withDayOfMonth(dueDay.coerceIn(1, 28))
+            if (thisMonth.isBefore(now)) thisMonth.plusMonths(1) else thisMonth
+        }
+        val firstDue = anchor.minusMonths((current - 1).toLong())
 
         // 空数组要当成"模型没读到"而不是"确实一期未还"：提示词让模型把不确定的字段填 null，
         // 但它对列表往往直接回 []，此时若照单收下，已还进度会被清零，而 currentPeriod 明明写着第 5 期。
