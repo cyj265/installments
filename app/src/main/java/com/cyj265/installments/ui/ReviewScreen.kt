@@ -141,6 +141,20 @@ private fun DraftCard(
             viewModel.updateDraft(index, draft.copy(nextDueDate = v.trim().takeIf { s -> s.isNotEmpty() }))
         }
 
+        // 实测：银行 App 的「借款详情」这一屏往往只有本金和总期数，每期金额与还款日在「查看还款计划」里。
+        // 与其让人照着空框手填，不如直接说清该回去截哪一张。
+        if (errorFields.contains("perPeriodAmount") && errorFields.contains("nextDueDate")) {
+            AlertBox(
+                text = "每期金额和下期还款日都不在这张截图上，它们通常在「查看还款计划」那一页。回去截那张再识别一次，比在这里手填快，也不会把期号填错。",
+                kind = ChipKind.NEUTRAL,
+                modifier = Modifier.padding(top = 10.dp),
+            )
+        }
+        // 模型抄进 note 的那些字段（合同期限、已还本金…）是人判断这条对不对的关键上下文，不显示就等于丢了
+        draft.note?.trim()?.takeIf { it.isNotEmpty() }?.let { extra ->
+            AlertBox(text = "模型还从截图读到：$extra", kind = ChipKind.NEUTRAL, modifier = Modifier.padding(top = 10.dp))
+        }
+
         // 口径不符提示：模型抄的"未还本金"和按剩余期数算出来的应还合计对不上。
         // 只在字段级 ERROR 已清掉之后再谈口径，否则期数本身就是残缺的，比出个错数只会误导。
         val principal = Money.parseCents(draft.principalOutstanding)
@@ -188,13 +202,14 @@ private fun DraftCard(
         Spacer(Modifier.height(10.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
             if (match is DraftMatch.Suspect) {
-                TextButton(text = "仍要新建", onClick = { finish(viewModel, index, forceNew = true, onBack) }, modifier = Modifier.weight(1f))
-                TextButton(text = "合并更新", filled = true, onClick = { finish(viewModel, index, forceNew = false, onBack) }, modifier = Modifier.weight(2f))
+                TextButton(text = "仍要新建", enabled = errorFields.isEmpty(), onClick = { finish(viewModel, index, forceNew = true, onBack) }, modifier = Modifier.weight(1f))
+                TextButton(text = "合并更新", filled = true, enabled = errorFields.isEmpty(), onClick = { finish(viewModel, index, forceNew = false, onBack) }, modifier = Modifier.weight(2f))
             } else {
                 TextButton(text = "取消", onClick = onDiscard, modifier = Modifier.weight(1f))
                 TextButton(
                     text = if (match is DraftMatch.Confirmed) "确认合并入库" else "确认入库",
                     filled = true,
+                    enabled = errorFields.isEmpty(),
                     onClick = { finish(viewModel, index, forceNew = false, onBack) },
                     modifier = Modifier.weight(2f),
                 )

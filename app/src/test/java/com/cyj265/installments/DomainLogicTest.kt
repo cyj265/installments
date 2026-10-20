@@ -72,6 +72,12 @@ class LoanAssemblerTest {
         assertEquals(listOf(1, 2, 4), loan.periods.filter { it.paid }.map { it.index })
     }
 
+    // 模型对"没读到"的列表通常回 [] 而不是 null，照单收下会把第 5 期的记录抹成一期未还
+    @Test fun emptyPaidPeriodsListFallsBackToCurrentPeriod() {
+        val loan = LoanAssembler.fromDraft(huabei.copy(paidPeriods = emptyList()))
+        assertEquals(4, loan.paidCount)
+    }
+
     @Test fun marksSettledWhenAllPaid() {
         val loan = LoanAssembler.fromDraft(huabei.copy(currentPeriod = 13, totalPeriods = 12, paidPeriods = (1..12).toList()))
         assertEquals(LoanStatus.SETTLED, loan.status)

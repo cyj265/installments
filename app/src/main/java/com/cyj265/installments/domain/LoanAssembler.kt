@@ -29,7 +29,9 @@ object LoanAssembler {
         val dueDay = draft.dueDayOfMonth ?: nextDue?.dayOfMonth ?: 1
         val firstDue = if (nextDue != null) nextDue.minusMonths((current - 1).toLong()) else now.withDayOfMonth(dueDay.coerceIn(1, 28))
 
-        val explicitPaid = draft.paidPeriods?.toSet()
+        // 空数组要当成"模型没读到"而不是"确实一期未还"：提示词让模型把不确定的字段填 null，
+        // 但它对列表往往直接回 []，此时若照单收下，已还进度会被清零，而 currentPeriod 明明写着第 5 期。
+        val explicitPaid = draft.paidPeriods?.toSet()?.takeIf { it.isNotEmpty() }
         val periods = (1..total).map { i ->
             Period(
                 index = i,

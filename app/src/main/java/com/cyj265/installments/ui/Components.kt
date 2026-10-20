@@ -230,12 +230,19 @@ fun TextButton(
 ) {
     val fq = LocalFqColors.current
     val shape = RoundedCornerShape(8.dp)
+    // 禁用态要连底色一起退掉：只把字压成灰色、底还是实心品牌绿，看着仍然像"可以点"
+    val bg = if (filled) {
+        if (enabled) fq.brand else fq.tickIdle
+    } else {
+        Color.Transparent
+    }
+    val stroke = if (filled && enabled) fq.brand else fq.line
     Box(
         contentAlignment = Alignment.Center,
         modifier = modifier
             .clip(shape)
-            .background(if (filled) fq.brand else Color.Transparent)
-            .border(1.dp, if (filled) fq.brand else fq.line, shape)
+            .background(bg)
+            .border(1.dp, stroke, shape)
             .clickable(enabled = enabled, onClick = onClick)
             .padding(horizontal = 12.dp, vertical = 8.dp),
     ) {
