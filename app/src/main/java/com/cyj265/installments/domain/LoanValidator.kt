@@ -38,6 +38,16 @@ object LoanValidator {
         if (current != null && total != null && current > total) {
             findings += error("currentPeriod", "当前期 $current 大于总期数 $total")
         }
+        // 银行页面上的「已摊销期数」是账单口径，模型常照抄成 paidPeriods；而 paidPeriods 非空时
+        // 会压过当前期，两者一矛盾，整条计划表就整体错位——第 2 期还没到却被标成已还就是这么来的。
+        val paidThrough = draft.paidThrough
+        if (current != null && draft.paidPeriods?.isNotEmpty() == true && paidThrough >= current) {
+            findings += warn(
+                "currentPeriod",
+                "已还期号里含第 $paidThrough 期，但当前期填的是 $current——本期不可能已经还过。" +
+                    "改「当前期」或「已还到第几期」任意一格，改过的那一格为准"
+            )
+        }
         val dueDate = draft.nextDueDateParsed
         val day = draft.dueDayOfMonth
         val rawDueDate = draft.nextDueDate?.trim()

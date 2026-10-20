@@ -86,4 +86,16 @@ data class InstallmentDraft(
 ) {
     val nextDueDateParsed: LocalDate?
         get() = nextDueDate?.let { raw -> runCatching { LocalDate.parse(raw.trim()) }.getOrNull() }
+
+    /**
+     * 连续已还到第几期。paidPeriods 非空时它压过 currentPeriod，所以确认页得先把它算出来，
+     * 才能告诉人「现在这一格实际会按几期已还入库」。
+     */
+    val paidThrough: Int
+        get() {
+            val explicit = paidPeriods?.toSet()?.takeIf { it.isNotEmpty() } ?: return ((currentPeriod ?: 1) - 1).coerceAtLeast(0)
+            var n = 0
+            while (explicit.contains(n + 1)) n++
+            return n
+        }
 }

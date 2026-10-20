@@ -129,7 +129,13 @@ private fun DraftCard(
             viewModel.updateDraft(index, draft.copy(loanNo = v.trim().takeIf { s -> s.isNotEmpty() }))
         }
         IntFieldRow("总期数", draft.totalPeriods, errorFields.contains("totalPeriods")) { v -> viewModel.updateDraft(index, draft.copy(totalPeriods = v)) }
-        IntFieldRow("当前期", draft.currentPeriod, errorFields.contains("currentPeriod")) { v -> viewModel.updateDraft(index, draft.copy(currentPeriod = v)) }
+        // 人一旦当场改过，模型抄来的 paidPeriods 就必须让位——它经常是把「已摊销期数」当成已还
+        IntFieldRow("当前期", draft.currentPeriod, errorFields.contains("currentPeriod")) { v ->
+            viewModel.updateDraft(index, draft.copy(currentPeriod = v, paidPeriods = null))
+        }
+        IntFieldRow("已还到第几期", draft.paidThrough, errorFields.contains("currentPeriod")) { v ->
+            if (v != null) viewModel.updateDraft(index, draft.copy(currentPeriod = v + 1, paidPeriods = null))
+        }
         FieldRow("每期金额", draft.perPeriodAmount ?: "", errorFields.contains("perPeriodAmount")) { v ->
             viewModel.updateDraft(index, draft.copy(perPeriodAmount = v))
         }

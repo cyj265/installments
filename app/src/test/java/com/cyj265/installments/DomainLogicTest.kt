@@ -199,6 +199,25 @@ class LoanValidatorTest {
         assertEquals("currentPeriod", findings.first { it.level == FindingLevel.ERROR }.field)
     }
 
+    // 真机案例：模型把「已摊销期数 2」抄成 paidPeriods:[1,2]，可本期就是第 2 期，钱还没还
+    @Test fun draftFlagsPaidListReachingCurrentPeriod() {
+        val findings = LoanValidator.validateDraft(draft().copy(currentPeriod = 2, paidPeriods = listOf(1, 2)))
+        val finding = findings.first { it.field == "currentPeriod" }
+        assertEquals(FindingLevel.WARN, finding.level)
+        assertTrue(finding.message.contains("不可能已经还过"))
+    }
+
+    @Test fun consistentPaidListProducesNoCurrentPeriodFinding() {
+        assertFalse(LoanValidator.validateDraft(draft().copy(paidPeriods = listOf(1, 2, 3, 4))).any { it.field == "currentPeriod" })
+    }
+
+    // 确认页那格显示的是这个值，跳号时只能算连续前缀，否则会把没还的第 3 期也标成已还
+    @Test fun paidThroughCountsOnlyContiguousPrefix() {
+        assertEquals(2, draft().copy(paidPeriods = listOf(1, 2, 4)).paidThrough)
+        assertEquals(4, draft().copy(paidPeriods = null).paidThrough)
+        assertEquals(0, draft().copy(paidPeriods = null, currentPeriod = 1).paidThrough)
+    }
+
     @Test fun draftRejectsDueDayInconsistentWithDate() {
         val findings = LoanValidator.validateDraft(draft().copy(dueDayOfMonth = 15))
         assertEquals(FindingLevel.WARN, findings.first { it.field == "dueDayOfMonth" }.level)
