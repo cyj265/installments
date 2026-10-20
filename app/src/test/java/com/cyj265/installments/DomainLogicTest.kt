@@ -224,6 +224,21 @@ class LoanIdentityTest {
         assertEquals("微众银行微粒贷", LoanIdentity.normalizeInstitution("微粒贷"))
     }
 
+    // 短别名先命中就会把不同平台并成一家，而合并是覆盖式的，错了不报错
+    @Test fun keepsAdjacentPlatformsApart() {
+        assertEquals("京东金条", LoanIdentity.normalizeInstitution("京东金条"))
+        assertEquals("美团月付", LoanIdentity.normalizeInstitution("美团月付"))
+        assertEquals("抖音月付", LoanIdentity.normalizeInstitution("抖音月付"))
+    }
+
+    // 银行全称、带「信用卡中心」后缀、带尾号，都得落到同一个机构名，否则下个月一张新截图就变成一笔新债
+    @Test fun normalizesBankNameVariants() {
+        assertEquals("浦发银行", LoanIdentity.normalizeInstitution("浦发银行信用卡中心"))
+        assertEquals("浦发银行", LoanIdentity.normalizeInstitution("上海浦东发展银行股份有限公司"))
+        assertEquals("交通银行", LoanIdentity.normalizeInstitution("交通银行信用卡 尾号1430"))
+        assertEquals("甘肃农商银行", LoanIdentity.normalizeInstitution("甘肃农村商业银行股份有限公司肃州广场支行"))
+    }
+
     @Test fun maskedLoanNoStillYieldsStrongKey() {
         val key = LoanIdentity.strongKey("支付宝花呗", "****3271")
         assertEquals(key, LoanIdentity.strongKey("支付宝花呗", "借款单号 202603271"))

@@ -15,23 +15,38 @@ object LoanIdentity {
         "信用购" to "支付宝花呗",
         "借呗" to "支付宝借呗",
         "蚂蚁借呗" to "支付宝借呗",
+        "京东白条" to "京东白条",
         "白条" to "京东白条",
         "京东" to "京东白条",
+        "京东金条" to "京东金条",
         "金条" to "京东金条",
         "微粒贷" to "微众银行微粒贷",
         "微众" to "微众银行微粒贷",
         "招行" to "招商银行",
         "招商银行" to "招商银行",
+        "抖音月付" to "抖音月付",
         "月付" to "抖音月付",
         "抖音" to "抖音月付",
+        "美团月付" to "美团月付",
         "美团" to "美团月付",
+        "浦发" to "浦发银行",
+        "浦东发展" to "浦发银行",
+        "交通银行" to "交通银行",
+        "交行" to "交通银行",
+        "甘肃农村商业银行" to "甘肃农商银行",
+        "甘肃农商银行" to "甘肃农商银行",
     )
 
     fun normalizeInstitution(raw: String?): String {
         val cleaned = raw?.filterNot { it.isWhitespace() }?.lowercase() ?: return ""
         if (cleaned.isEmpty()) return ""
         aliases[cleaned]?.let { return it }
-        val hit = aliases.entries.firstOrNull { (alias, _) -> cleaned.contains(alias.lowercase()) }
+        // 必须从最长的别名开始找：按插入顺序命中「京东」会把京东金条归成京东白条，
+        // 命中「月付」会把美团月付归成抖音月付——两个不同平台的债会被对账逻辑并成一条，
+        // 而合并更新是覆盖式的，错了不会有任何提示。
+        val hit = aliases.entries
+            .sortedByDescending { (alias, _) -> alias.length }
+            .firstOrNull { (alias, _) -> cleaned.contains(alias.lowercase()) }
         return hit?.value ?: raw!!.trim()
     }
 
