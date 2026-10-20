@@ -1,5 +1,8 @@
 package com.cyj265.installments.ui
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -37,6 +40,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.cyj265.installments.data.Money
+import com.cyj265.installments.data.VisionRecognizer
 import com.cyj265.installments.domain.DueItem
 import com.cyj265.installments.domain.Portfolio
 import java.time.LocalDate
@@ -298,6 +302,7 @@ fun SettingsScreen(
     var baseUrl by remember { mutableStateOf(viewModel.settings.baseUrl) }
     var model by remember { mutableStateOf(viewModel.settings.model) }
     var apiKey by remember { mutableStateOf(viewModel.settings.apiKey) }
+    var promptOpen by remember { mutableStateOf(false) }
     val ready = baseUrl.isNotBlank() && model.isNotBlank() && apiKey.isNotBlank()
     LazyColumn(modifier = modifier.fillMaxWidth().padding(horizontal = 14.dp)) {
         item {
@@ -322,12 +327,31 @@ fun SettingsScreen(
             )
             AlertBox(
                 text = if (apiKey.isBlank()) {
-                    "还没填 Key。不填也能用：把截图发给任意一个视觉模型，让它按固定格式回 JSON，再用本页下方的「粘贴 JSON 导入」。Key 只会写进本机应用私有目录，不进 Git、不随备份导出。"
+                    "还没填 Key。不填也能用：点下面「发给模型的指令」把那段话复制走，配着截图发给任意一个视觉模型，再把它回的 JSON 原样贴进本页的「粘贴 JSON 导入」。"
                 } else {
                     "Key 只写进本机应用私有目录，不进 Git、不随备份导出，这一格默认遮住、点「显示」才展开。这份 APK 若要发给别人，必须先在这里清空，让对方填自己的免费 Key。"
                 },
                 modifier = Modifier.padding(top = 10.dp),
             )
+            ActionRow(
+                "发给模型的指令",
+                if (promptOpen) "收起" else "没有 Key 时，把这段和截图一起发给任意视觉模型",
+                onClick = { promptOpen = !promptOpen },
+            )
+            if (promptOpen) {
+                AlertBox(
+                    text = VisionRecognizer.PROMPT,
+                    kind = ChipKind.NEUTRAL,
+                    modifier = Modifier.padding(top = 10.dp),
+                    actions = {
+                        TextButton(text = "复制这段指令", onClick = {
+                            val clip = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                            clip.setPrimaryClip(ClipData.newPlainText("识别指令", VisionRecognizer.PROMPT))
+                            viewModel.showMessage("指令已复制。模型回答的 JSON 原样贴回「粘贴 JSON 导入」即可")
+                        })
+                    },
+                )
+            }
         }
         item {
             SectionTitle("数据", "本机存储")

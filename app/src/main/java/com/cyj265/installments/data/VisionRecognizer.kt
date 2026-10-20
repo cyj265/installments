@@ -63,6 +63,8 @@ class RecognitionException(message: String) : Exception(message)
  */
 class VisionRecognizer(private val settings: SettingsStore) {
 
+    private val lenientJson = Json { isLenient = true }
+
     suspend fun recognize(imageBytes: ByteArray): String = withContext(Dispatchers.IO) {
         if (!settings.recognizerReady) {
             throw RecognitionException("还没填识别服务的 API Key，请改用「粘贴 JSON」导入")
@@ -89,7 +91,7 @@ class VisionRecognizer(private val settings: SettingsStore) {
     }
 
     private fun extractContent(responseBody: String): String {
-        val root = runCatching { Json { isLenient = true }.parseToJsonElement(responseBody) }.getOrNull()
+        val root = runCatching { lenientJson.parseToJsonElement(responseBody) }.getOrNull()
             ?: throw RecognitionException("识别服务的回答不是可读的 JSON（可能被限流或返回了 HTML）")
         val element = runCatching { root.jsonObject["choices"]!!.jsonArray[0].jsonObject["message"]!!.jsonObject["content"] }
             .getOrNull() ?: throw RecognitionException("识别服务没有返回内容：${responseBody.take(200)}")
@@ -142,12 +144,14 @@ class VisionRecognizer(private val settings: SettingsStore) {
         }
     }
 
-    private companion object {
+    companion object {
         const val MAX_EDGE = 1280
-    }
-}
 
-private const val PROMPT = """你是分期还款台账录入员。只看这张截图上明确出现的内容，把它们抄成 JSON，不要推测、不要计算、不要补全截图上没有的数字。
+        /**
+         * 真正发给模型的那段话。公开它是因为「我的」页要原样显示并允许复制——
+         * 没有 Key、手动去问模型的人拿的是同一段指令，两处一旦分叉，粘回来的 JSON 就对不上校验规则。
+         */
+        const val PROMPT = """你是分期还款台账录入员。只看这张截图上明确出现的内容，把它们抄成 JSON，不要推测、不要计算、不要补全截图上没有的数字。
 
 只输出一个 JSON 对象，形如：
 {"records":[{"institution":"支付宝花呗","loanNo":"****3271","totalPeriods":12,"currentPeriod":5,"perPeriodAmount":"680.00","principalOutstanding":"4760.00","dueDayOfMonth":28,"nextDueDate":"2026-10-28","paidPeriods":[1,2,3,4],"note":"截图原文里的备注"}]}
@@ -159,3 +163,5 @@ private const val PROMPT = """你是分期还款台账录入员。只看这张�
 4. 日期用 YYYY-MM-DD。只写了"每月28日"这种，就填 dueDayOfMonth，nextDueDate 填 null。
 5. 一张截图里若有多个独立分期单，全部放进 records。
 6. 看不清或不存在的字段填 null，不要猜。单号被遮挡就照抄带星号的原文。"""
+    }
+}

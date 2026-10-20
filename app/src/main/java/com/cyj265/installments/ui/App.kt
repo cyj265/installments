@@ -371,7 +371,7 @@ private fun PasteDialog(onDismiss: () -> Unit, onSubmit: (String) -> Unit) {
         text = {
             Column {
                 Text(
-                    text = "把模型输出的 JSON 原文贴进来（带说明文字或 ``` 代码块也能读）。解析出的条目仍要在确认页核对，不会直接入库。",
+                    text = "把模型输出的 JSON 原文贴进来（带说明文字或 ``` 代码块也能读）。要发给模型的指令原文在「我的 → 发给模型的指令」，可直接复制。解析出的条目仍要在确认页核对，不会直接入库。",
                     color = fq.muted,
                     style = TextStyle(fontSize = FqBodySmall),
                 )
