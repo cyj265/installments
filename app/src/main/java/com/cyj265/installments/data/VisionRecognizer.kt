@@ -169,7 +169,7 @@ class VisionRecognizer(private val settings: SettingsStore) {
 规则：
 1. 金额一律照抄截图上的写法，用字符串，带小数点，不要带货币符号和千分位。
 2. "未还本金/剩余本金"与"剩余应还/待还总额/本金+利息合计"是两个不同口径，截图上分别是多少就写多少；只有"未还本金"填 principalOutstanding，另一个填 note 里说明，不要混用。
-3. currentPeriod 是"本期是第几期"，从 1 开始。totalPeriods 是总期数。
+3. currentPeriod 是"本期是第几期"，从 1 开始。totalPeriods 是总期数。paidPeriods 只写明确标着"已还/已还清/已扣款"的期号；"已入账""待入账""待还"是账单已出但钱还没还，不要写进 paidPeriods。
 4. 日期用 YYYY-MM-DD。只写了"每月28日"这种，就填 dueDayOfMonth，nextDueDate 填 null。
 5. 一次可能给你多张截图：机构与单号相同的多张属于同一笔，把它们合并成一条记录，某个字段哪张上出现就取哪张；机构或单号不同的，各成一条。同一字段在不同张上数值不一样时，取更完整那张的值，并在 note 里写明冲突。
 6. 看不清或不存在的字段填 null，不要猜。单号被遮挡就照抄带星号的原文。"""
