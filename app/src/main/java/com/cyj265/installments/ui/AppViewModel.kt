@@ -107,7 +107,7 @@ class AppViewModel(
                             busy = false,
                             drafts = _state.value.drafts + result.drafts,
                             // 空结果必须吭一声，否则点了「＋ 截图」像是没生效
-                            toast = if (result.drafts.isEmpty()) "这几张图里没读到可用的分期信息，可以把「借款详情」和「还款计划」一起选上再试一次" else "读到 ${result.drafts.size} 条，请逐条确认",
+                            toast = if (result.drafts.isEmpty()) "没读到可用的分期信息。「还款计划」那种按月列几行应还的是多笔借款合计，读不出单笔，请改选逐笔列出的「应还款详情」" else "读到 ${result.drafts.size} 条，请逐条确认",
                         )
                     }
                 }
