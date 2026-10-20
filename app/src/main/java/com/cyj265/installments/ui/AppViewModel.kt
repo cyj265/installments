@@ -93,10 +93,10 @@ class AppViewModel(
         }
     }
 
-    fun recognize(imageBytes: ByteArray) {
+    fun recognize(images: List<ByteArray>) {
         viewModelScope.launch {
             _state.value = _state.value.copy(busy = true, toast = null)
-            runCatching { recognizer.recognize(imageBytes) }
+            runCatching { recognizer.recognize(images) }
                 .onSuccess { raw ->
                     when (val result = DraftImport.parse(raw)) {
                         is DraftImport.Result.Failed -> _state.value = _state.value.copy(
@@ -107,7 +107,7 @@ class AppViewModel(
                             busy = false,
                             drafts = _state.value.drafts + result.drafts,
                             // 空结果必须吭一声，否则点了「＋ 截图」像是没生效
-                            toast = if (result.drafts.isEmpty()) "这张截图里没读到可用的分期信息，可以换一张更完整的再试" else "读到 ${result.drafts.size} 条，请逐条确认",
+                            toast = if (result.drafts.isEmpty()) "这几张图里没读到可用的分期信息，可以把「借款详情」和「还款计划」一起选上再试一次" else "读到 ${result.drafts.size} 条，请逐条确认",
                         )
                     }
                 }

@@ -55,6 +55,9 @@ import kotlinx.coroutines.withContext
 
 private enum class Screen { OVERVIEW, CALENDAR, MINE, DETAIL, REVIEW }
 
+/** 一次最多选 4 张：详情 + 还款计划 + 放款凭证足够拼出一笔，再多模型容易把两笔串成一条。 */
+private const val MAX_SHOTS = 4
+
 @Composable
 fun InstallmentsApp(viewModel: AppViewModel = viewModel(factory = AppViewModel.Factory)) {
     val state by viewModel.state.collectAsState()
@@ -81,12 +84,13 @@ fun InstallmentsApp(viewModel: AppViewModel = viewModel(factory = AppViewModel.F
         if (state.drafts.isNotEmpty() && route == Screen.OVERVIEW) routeName = Screen.REVIEW.name
     }
 
-    val pickImage = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-        if (uri != null) {
+    // 支持一次选多张：同一笔的「借款详情」和「还款计划」各缺一半，分开识别就只能人肉补
+    val pickImages = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(MAX_SHOTS)) { uris ->
+        if (uris.isNotEmpty()) {
             scope.launch {
-                runCatching { readBytes(context, uri) }
+                runCatching { uris.map { readBytes(context, it) } }
                     .onSuccess { viewModel.recognize(it) }
-                    .onFailure { viewModel.showMessage("读不到这张图片：${it.message}") }
+                    .onFailure { viewModel.showMessage("有图片读不出来：${it.message}") }
             }
         }
     }
@@ -128,7 +132,7 @@ fun InstallmentsApp(viewModel: AppViewModel = viewModel(factory = AppViewModel.F
                         Screen.OVERVIEW -> OverviewScreen(
                             state = state,
                             onOpenLoan = { detailId = it; routeName = Screen.DETAIL.name },
-                            onEmptyImport = { pickImage.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+                            onEmptyImport = { pickImages.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
                         )
 
                         Screen.CALENDAR -> CalendarScreen(
@@ -179,7 +183,7 @@ fun InstallmentsApp(viewModel: AppViewModel = viewModel(factory = AppViewModel.F
             if (route == Screen.OVERVIEW) {
                 ImportFab(
                     busy = state.busy,
-                    onShoot = { pickImage.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+                    onShoot = { pickImages.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
                     onPaste = { pasteOpen = true },
                 )
             }

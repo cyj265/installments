@@ -115,8 +115,8 @@ fun OverviewScreen(
             item {
                 EmptyState(
                     title = "还没有分期记录",
-                    body = "把花呗、白条、银行账单的分期页截图导进来，我会读出金额和还款日给你核对，你确认后才会入库。",
-                    action = { TextButton(text = "导入第一张截图", filled = true, onClick = onEmptyImport) },
+                    body = "把花呗、白条、银行账单的分期页截图选进来。同一笔如果一页读不全，把「借款详情」和「还款计划」一起选上，最多 4 张。读出后先给你核对，确认才入库。",
+                    action = { TextButton(text = "选截图导入", filled = true, onClick = onEmptyImport) },
                 )
             }
         } else {

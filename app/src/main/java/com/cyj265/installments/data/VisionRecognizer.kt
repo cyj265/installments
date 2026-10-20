@@ -65,11 +65,16 @@ class VisionRecognizer(private val settings: SettingsStore) {
 
     private val lenientJson = Json { isLenient = true }
 
-    suspend fun recognize(imageBytes: ByteArray): String = withContext(Dispatchers.IO) {
+    /**
+     * 一次可以发多张：同一笔分期的「借款详情」和「还款计划」各缺一半，
+     * 分两轮识别就只能靠人手工补，放同一轮里模型自己能拼成一条。
+     */
+    suspend fun recognize(images: List<ByteArray>): String = withContext(Dispatchers.IO) {
         if (!settings.recognizerReady) {
             throw RecognitionException("还没填识别服务的 API Key，请改用「粘贴 JSON」导入")
         }
-        val body = buildRequestBody(shrink(imageBytes))
+        if (images.isEmpty()) throw RecognitionException("没有收到图片")
+        val body = buildRequestBody(images.map { shrink(it) })
         val conn = URL(settings.baseUrl + "/chat/completions").openConnection() as HttpURLConnection
         try {
             conn.requestMethod = "POST"
@@ -98,21 +103,26 @@ class VisionRecognizer(private val settings: SettingsStore) {
         return element.jsonPrimitive.content
     }
 
-    private fun buildRequestBody(jpeg: ByteArray): String {
-        val dataUrl = "data:image/jpeg;base64," + Base64.encodeToString(jpeg, Base64.NO_WRAP)
+    private fun buildRequestBody(jpegs: List<ByteArray>): String {
         return buildJsonObject {
             put("model", settings.model)
             put("temperature", 0)
+            // 多图意味着可能一次吐出好几条记录，不显式给足长度的话，端点默认值会把 JSON 截断在半路
+            put("max_tokens", 2048)
             putJsonArray("messages") {
                 add(
                     buildJsonObject {
                         put("role", "user")
                         putJsonArray("content") {
                             add(buildJsonObject { put("type", "text"); put("text", PROMPT) })
-                            add(buildJsonObject {
-                                put("type", "image_url")
-                                putJsonObject("image_url") { put("url", dataUrl) }
-                            })
+                            jpegs.forEach { jpeg ->
+                                add(buildJsonObject {
+                                    put("type", "image_url")
+                                    putJsonObject("image_url") {
+                                        put("url", "data:image/jpeg;base64," + Base64.encodeToString(jpeg, Base64.NO_WRAP))
+                                    }
+                                })
+                            }
                         }
                     },
                 )
@@ -161,7 +171,7 @@ class VisionRecognizer(private val settings: SettingsStore) {
 2. "未还本金/剩余本金"与"剩余应还/待还总额/本金+利息合计"是两个不同口径，截图上分别是多少就写多少；只有"未还本金"填 principalOutstanding，另一个填 note 里说明，不要混用。
 3. currentPeriod 是"本期是第几期"，从 1 开始。totalPeriods 是总期数。
 4. 日期用 YYYY-MM-DD。只写了"每月28日"这种，就填 dueDayOfMonth，nextDueDate 填 null。
-5. 一张截图里若有多个独立分期单，全部放进 records。
+5. 一次可能给你多张截图：机构与单号相同的多张属于同一笔，把它们合并成一条记录，某个字段哪张上出现就取哪张；机构或单号不同的，各成一条。同一字段在不同张上数值不一样时，取更完整那张的值，并在 note 里写明冲突。
 6. 看不清或不存在的字段填 null，不要猜。单号被遮挡就照抄带星号的原文。"""
     }
 }
