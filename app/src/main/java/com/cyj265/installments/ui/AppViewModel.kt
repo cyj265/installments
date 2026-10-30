@@ -6,11 +6,13 @@ import androidx.lifecycle.ViewModelProvider.AndroidViewModelFactory.Companion.AP
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import androidx.lifecycle.viewModelScope
+import com.cyj265.installments.data.CalendarSync
 import com.cyj265.installments.data.DraftImport
 import com.cyj265.installments.data.InstallmentDraft
 import com.cyj265.installments.data.JsonLoanStore
 import com.cyj265.installments.data.Loan
 import com.cyj265.installments.data.LoanStatus
+import com.cyj265.installments.data.Money
 import com.cyj265.installments.data.SettingsStore
 import com.cyj265.installments.data.StoreFile
 import com.cyj265.installments.data.VisionRecognizer
@@ -36,6 +38,11 @@ data class AppUiState(
     val loading: Boolean = true,
     val busy: Boolean = false,
     val toast: String? = null,
+    val calendarEnabled: Boolean = false,
+    val calendarCount: Int = 0,
+    /** 检测到的日历清单，写不进去时人得靠它判断是没日历还是只读。 */
+    val calendarSummary: String? = null,
+    val calendarProblem: String? = null,
 )
 
 /**
@@ -47,9 +54,10 @@ class AppViewModel(
     private val store: JsonLoanStore,
     val settings: SettingsStore,
     private val recognizer: VisionRecognizer,
+    private val calendar: CalendarSync,
 ) : ViewModel() {
 
-    private val _state = MutableStateFlow(AppUiState())
+    private val _state = MutableStateFlow(AppUiState(calendarEnabled = settings.calendarSync))
     val state: StateFlow<AppUiState> = _state.asStateFlow()
 
     init {
@@ -64,7 +72,55 @@ class AppViewModel(
                 loading = false,
                 toast = loaded.exceptionOrNull()?.let { "读取本地数据失败：${it.message}" },
             )
+            // 启动时也同步一次：人在日历里手动删掉的事件只有这时候才发现得了
+            syncCalendar(reportError = false)
         }
+    }
+
+    /** 打开/关闭日历同步。打开时由界面先要到日历权限再调这里。 */
+    fun setCalendarSync(on: Boolean) {
+        viewModelScope.launch {
+            calendar.enabled = on
+            _state.value = _state.value.copy(calendarEnabled = on)
+            if (on) {
+                val outcome = calendar.sync(_state.value.loans)
+                _state.value = _state.value.copy(
+                    calendarCount = outcome.written,
+                    calendarSummary = outcome.calendars,
+                    calendarProblem = outcome.error,
+                    toast = outcome.error ?: "已把 ${outcome.written} 期未还还款日写进本机日历，还款日早上 9 点提醒",
+                )
+            } else {
+                val removed = calendar.clear()
+                _state.value = _state.value.copy(
+                    calendarCount = 0,
+                    calendarProblem = null,
+                    toast = "已从日历删除 $removed 条还款提醒",
+                )
+            }
+        }
+    }
+
+    /**
+     * 台账一变就把日历重建一遍：已还的期自动从日历消失，改过的金额/日期也跟着更新。
+     * [reportError] 为 false 时只报「事件被删了」，不报权限/日历缺失——否则每次冷启动都弹一次同样的错；
+     * 但问题本身要留在设置页上，否则人点开关看不出为什么没写进去。
+     */
+    private suspend fun syncCalendar(reportError: Boolean) {
+        if (!calendar.enabled) return
+        val outcome = calendar.sync(_state.value.loans)
+        val note = when {
+            outcome.error != null -> if (reportError) outcome.error else null
+            outcome.vanished.isNotEmpty() ->
+                "日历里有 ${outcome.vanished.size} 条还款事件被删掉了。如果是已经还过的期，去对应分期里点一下「已还」"
+            else -> null
+        }
+        _state.value = _state.value.copy(
+            calendarCount = outcome.written,
+            calendarSummary = outcome.calendars,
+            calendarProblem = outcome.error,
+            toast = note ?: _state.value.toast,
+        )
     }
 
     fun updateDraft(index: Int, draft: InstallmentDraft) {
@@ -136,6 +192,8 @@ class AppViewModel(
             perPeriodAmountCents = assembled.perPeriodAmountCents,
             dueDayOfMonth = assembled.dueDayOfMonth,
             totalPeriods = assembled.totalPeriods,
+            tradeDate = assembled.tradeDate,
+            principalTotalCents = assembled.principalTotalOrNull,
         )
         val final = if (forceNew) {
             assembled
@@ -188,6 +246,91 @@ class AppViewModel(
         )
     }
 
+    /**
+     * 明细页订正一笔。返回 false 表示有字段填的不是数字、或改完和剩余应还自相矛盾，
+     * 界面应停在编辑态让人接着改，别把一次写坏的金额静默存进台账。
+     */
+    fun editLoan(
+        loanId: String,
+        institution: String,
+        loanNo: String?,
+        perPeriodAmount: String?,
+        principalOutstanding: String?,
+        principalTotal: String?,
+        dueDay: String?,
+        statementDay: String?,
+        tradeDate: String?,
+    ): Boolean {
+        val loan = find(loanId) ?: return false
+        if (institution.isBlank()) {
+            _state.value = _state.value.copy(toast = "机构名不能为空，强键靠它和单号后 4 位认这笔")
+            return false
+        }
+        val perPeriod = Money.parseCents(perPeriodAmount)
+        if (perPeriod == null || perPeriod <= 0L) {
+            _state.value = _state.value.copy(toast = "每期金额「${perPeriodAmount?.trim() ?: "空"}」不是数字")
+            return false
+        }
+        val principalText = principalOutstanding?.trim().orEmpty()
+        val principal = when {
+            principalText.isEmpty() -> null
+            else -> Money.parseCents(principalText) ?: run {
+                _state.value = _state.value.copy(toast = "未还本金「$principalText」不是数字，不知道就留空")
+                return false
+            }
+        }
+        val totalText = principalTotal?.trim().orEmpty()
+        val total = when {
+            totalText.isEmpty() -> null
+            else -> Money.parseCents(totalText) ?: run {
+                _state.value = _state.value.copy(toast = "借款本金「$totalText」不是数字，不知道就留空")
+                return false
+            }
+        }
+        val day = dueDay?.trim()?.toIntOrNull()
+        if (day == null || day !in 1..31) {
+            _state.value = _state.value.copy(toast = "还款日要填 1–31 的日号，比如每月 15 日就填 15")
+            return false
+        }
+        val statementText = statementDay?.trim().orEmpty()
+        val statement = when {
+            statementText.isEmpty() -> null
+            else -> statementText.toIntOrNull()?.takeIf { it in 1..31 } ?: run {
+                _state.value = _state.value.copy(toast = "账单日要填 1–31 的日号，不知道就留空")
+                return false
+            }
+        }
+        val tradeText = tradeDate?.trim().orEmpty()
+        val trade = when {
+            tradeText.isEmpty() -> null
+            else -> runCatching { LocalDate.parse(tradeText) }.getOrNull() ?: run {
+                _state.value = _state.value.copy(toast = "交易日期「$tradeText」读不出，改成 2026-08-25 这种格式，或留空")
+                return false
+            }
+        }
+        val planTotal = perPeriod * loan.totalPeriods
+        if (total != null) {
+            if (principal != null && total < principal) {
+                _state.value = _state.value.copy(toast = "借款本金不能小于未还本金（${Money.format(principal)}）")
+                return false
+            }
+            if (total > planTotal) {
+                _state.value = _state.value.copy(toast = "借款本金比全部 ${loan.totalPeriods} 期应还 ${Money.format(planTotal)} 还多，两者至少有一个填错了")
+                return false
+            }
+        }
+        val edited = LoanAssembler.applyEdits(
+            loan, institution, loanNo, perPeriod, principal, total,
+            dueDayOfMonth = day, statementDay = statement, tradeDate = trade,
+        )
+        LoanValidator.validateLoan(edited).firstOrNull { it.level == FindingLevel.ERROR }?.let {
+            _state.value = _state.value.copy(toast = it.message)
+            return false
+        }
+        persist(edited, "已更新 ${edited.institution}")
+        return true
+    }
+
     fun delete(loanId: String) {
         val loan = find(loanId) ?: return
         viewModelScope.launch {
@@ -196,6 +339,7 @@ class AppViewModel(
                 loans = _state.value.loans.filterNot { it.id == loanId },
                 toast = "已删除 ${loan.institution}",
             )
+            syncCalendar(reportError = true)
         }
     }
 
@@ -228,6 +372,7 @@ class AppViewModel(
                     viewModelScope.launch {
                         store.save(file.loans)
                         _state.value = _state.value.copy(loans = file.loans, toast = "已从备份恢复 ${file.loans.size} 笔")
+                        syncCalendar(reportError = true)
                     }
                 }
             }
@@ -247,6 +392,7 @@ class AppViewModel(
                 loans = if (i < 0) current + loan else current.toMutableList().apply { this[i] = loan },
                 toast = message,
             )
+            syncCalendar(reportError = true)
         }
     }
 
@@ -259,6 +405,7 @@ class AppViewModel(
                     store = JsonLoanStore(File(app.filesDir, "loans.json")),
                     settings = settings,
                     recognizer = VisionRecognizer(settings),
+                    calendar = CalendarSync(app, settings),
                 )
             }
         }

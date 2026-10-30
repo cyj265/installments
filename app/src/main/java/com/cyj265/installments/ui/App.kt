@@ -2,6 +2,7 @@ package com.cyj265.installments.ui
 
 import android.content.Context
 import android.net.Uri
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -20,6 +21,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
@@ -55,21 +58,30 @@ import kotlinx.coroutines.withContext
 
 private enum class Screen { OVERVIEW, CALENDAR, MINE, DETAIL, REVIEW }
 
+/** 一级页顺序即横滑顺序：总览 → 日历 → 我的。 */
+private val TABS = listOf(Screen.OVERVIEW, Screen.CALENDAR, Screen.MINE)
+
 /** 一次最多选 4 张：详情 + 还款计划 + 放款凭证足够拼出一笔，再多模型容易把两笔串成一条。 */
 private const val MAX_SHOTS = 4
 
 @Composable
 fun InstallmentsApp(viewModel: AppViewModel = viewModel(factory = AppViewModel.Factory)) {
     val state by viewModel.state.collectAsState()
-    val fq = LocalFqColors.current
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
-    // 路由用字符串存，配置变更时 rememberSaveable 不需要 Parcelable
+    // 三个 tab 交给 pager 自己管：pager 停在哪个 tab，就从哪个 tab 进详情、退回哪个 tab，
+    // 不用再维护一套返回栈。routeName 只负责二级页（详情 / 确认）。
     var routeName by rememberSaveable { mutableStateOf(Screen.OVERVIEW.name) }
     var detailId by rememberSaveable { mutableStateOf<String?>(null) }
     var pasteOpen by remember { mutableStateOf(false) }
     val route = runCatching { Screen.valueOf(routeName) }.getOrDefault(Screen.OVERVIEW)
+    val secondary = route == Screen.DETAIL || route == Screen.REVIEW
+    val pagerState = rememberPagerState { TABS.size }
+    val goBack = { routeName = Screen.OVERVIEW.name }
+
+    // 侧边返回 / 返回键：二级页退回进入前的 tab；一级页不拦，交给系统退出 App。
+    BackHandler(enabled = secondary) { goBack() }
 
     LaunchedEffect(state.toast) {
         if (state.toast != null) {
@@ -81,7 +93,7 @@ fun InstallmentsApp(viewModel: AppViewModel = viewModel(factory = AppViewModel.F
     // 识别或粘贴产出新草稿时自动进入确认页；只有条数变化才触发，
     // 所以用户主动退回总览后不会被反复拽回来，横幅还在，随时能回去继续。
     LaunchedEffect(state.drafts.size) {
-        if (state.drafts.isNotEmpty() && route == Screen.OVERVIEW) routeName = Screen.REVIEW.name
+        if (state.drafts.isNotEmpty() && !secondary && pagerState.currentPage == 0) routeName = Screen.REVIEW.name
     }
 
     // 支持一次选多张：同一笔的「借款详情」和「还款计划」各缺一半，分开识别就只能人肉补
@@ -113,74 +125,74 @@ fun InstallmentsApp(viewModel: AppViewModel = viewModel(factory = AppViewModel.F
         }
     }
 
-    val secondary = route == Screen.DETAIL || route == Screen.REVIEW
-
     FqTheme {
+        // 必须在 FqTheme 里面读。在外面读拿到的是 CompositionLocal 的默认值 LightFq——
+        // 系统深色时全屏就是「浅米色底 + 暗色卡片」，卡片上用 ink/muted 写的字全压在浅底上看不见。
+        val fq = LocalFqColors.current
         Box(modifier = Modifier.fillMaxSize().background(fq.paper).safeDrawingPadding()) {
             Column(modifier = Modifier.fillMaxSize()) {
                 AppBar(
-                    route = route,
+                    screen = if (secondary) route else TABS[pagerState.currentPage],
                     state = state,
                     detailId = detailId,
-                    onBack = { routeName = Screen.OVERVIEW.name },
+                    onBack = goBack,
                 )
                 if (state.drafts.isNotEmpty() && route != Screen.REVIEW) {
                     PendingBanner(count = state.drafts.size) { routeName = Screen.REVIEW.name }
                 }
                 Box(modifier = Modifier.weight(1f)) {
-                    when (route) {
-                        Screen.OVERVIEW -> OverviewScreen(
-                            state = state,
-                            onOpenLoan = { detailId = it; routeName = Screen.DETAIL.name },
-                            onEmptyImport = { pickImages.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
-                        )
+                    if (secondary) {
+                        when (route) {
+                            Screen.DETAIL -> DetailScreen(
+                                loan = state.loans.firstOrNull { it.id == detailId },
+                                state = state,
+                                viewModel = viewModel,
+                                onBack = goBack,
+                            )
 
-                        Screen.CALENDAR -> CalendarScreen(
-                            state = state,
-                            onOpenLoan = { detailId = it; routeName = Screen.DETAIL.name },
-                        )
+                            else -> ReviewScreen(
+                                state = state,
+                                viewModel = viewModel,
+                                onBack = goBack,
+                            )
+                        }
+                    } else {
+                        HorizontalPager(state = pagerState, modifier = Modifier.fillMaxSize()) { page ->
+                            when (TABS[page]) {
+                                Screen.OVERVIEW -> OverviewScreen(
+                                    state = state,
+                                    onOpenLoan = { detailId = it; routeName = Screen.DETAIL.name },
+                                    onEmptyImport = { pickImages.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
+                                    modifier = Modifier.fillMaxSize(),
+                                )
 
-                        Screen.MINE -> SettingsScreen(
-                            state = state,
-                            viewModel = viewModel,
-                            onPasteJson = { pasteOpen = true },
-                            onExport = { createDocument.launch("loans-${LocalDate.now()}.json") },
-                            onRestore = { openDocument.launch(arrayOf("application/json", "text/plain", "*/*")) },
-                        )
+                                Screen.CALENDAR -> CalendarScreen(
+                                    state = state,
+                                    onOpenLoan = { detailId = it; routeName = Screen.DETAIL.name },
+                                    modifier = Modifier.fillMaxSize(),
+                                )
 
-                        Screen.DETAIL -> DetailScreen(
-                            loan = state.loans.firstOrNull { it.id == detailId },
-                            state = state,
-                            viewModel = viewModel,
-                            onBack = { routeName = Screen.OVERVIEW.name },
-                        )
-
-                        Screen.REVIEW -> ReviewScreen(
-                            state = state,
-                            viewModel = viewModel,
-                            onBack = { routeName = Screen.OVERVIEW.name },
-                        )
+                                else -> SettingsScreen(
+                                    state = state,
+                                    viewModel = viewModel,
+                                    onPasteJson = { pasteOpen = true },
+                                    onExport = { createDocument.launch("loans-${LocalDate.now()}.json") },
+                                    onRestore = { openDocument.launch(arrayOf("application/json", "text/plain", "*/*")) },
+                                    modifier = Modifier.fillMaxSize(),
+                                )
+                            }
+                        }
                     }
                 }
                 if (!secondary) {
                     TabBar(
-                        selected = when (route) {
-                            Screen.CALENDAR -> 1
-                            Screen.MINE -> 2
-                            else -> 0
-                        },
-                        onSelect = { index ->
-                            routeName = when (index) {
-                                1 -> Screen.CALENDAR.name
-                                2 -> Screen.MINE.name
-                                else -> Screen.OVERVIEW.name
-                            }
-                        },
+                        selected = pagerState.currentPage,
+                        onSelect = { index -> scope.launch { pagerState.animateScrollToPage(index) } },
                     )
                 }
             }
 
-            if (route == Screen.OVERVIEW) {
+            if (!secondary && pagerState.currentPage == 0) {
                 ImportFab(
                     busy = state.busy,
                     onShoot = { pickImages.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) },
@@ -212,9 +224,9 @@ fun InstallmentsApp(viewModel: AppViewModel = viewModel(factory = AppViewModel.F
 }
 
 @Composable
-private fun AppBar(route: Screen, state: AppUiState, detailId: String?, onBack: () -> Unit) {
+private fun AppBar(screen: Screen, state: AppUiState, detailId: String?, onBack: () -> Unit) {
     val fq = LocalFqColors.current
-    val secondary = route == Screen.DETAIL || route == Screen.REVIEW
+    val secondary = screen == Screen.DETAIL || screen == Screen.REVIEW
     Row(
         modifier = Modifier.fillMaxWidth().padding(start = 8.dp, end = 14.dp, top = 8.dp, bottom = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -223,7 +235,7 @@ private fun AppBar(route: Screen, state: AppUiState, detailId: String?, onBack: 
             TextButton(text = "‹ 返回", onClick = onBack)
             Spacer(Modifier.width(6.dp))
         }
-        val title = when (route) {
+        val title = when (screen) {
             Screen.OVERVIEW -> "分期管家"
             Screen.CALENDAR -> "还款日历"
             Screen.MINE -> "我的"
@@ -236,7 +248,7 @@ private fun AppBar(route: Screen, state: AppUiState, detailId: String?, onBack: 
             maxLines = 1,
             modifier = Modifier.weight(1f),
         )
-        val trailing = when (route) {
+        val trailing = when (screen) {
             Screen.OVERVIEW -> "${state.loans.count { com.cyj265.installments.data.LoanStatus.ACTIVE == it.status }} 笔进行中"
             Screen.CALENDAR -> "${state.today.monthValue} 月 ${state.today.dayOfMonth} 日"
             Screen.REVIEW -> if (state.busy) "识别中…" else null
@@ -326,11 +338,12 @@ private fun TabBar(selected: Int, onSelect: (Int) -> Unit) {
 @Composable
 private fun ImportFab(busy: Boolean, onShoot: () -> Unit, onPaste: () -> Unit) {
     val fq = LocalFqColors.current
-    Box(modifier = Modifier.fillMaxSize()) {
-        Column(
-            horizontalAlignment = Alignment.End,
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-            modifier = Modifier.align(Alignment.BottomEnd).padding(end = 16.dp, bottom = 84.dp),
+    // 两个按钮并排：竖着摞会把「粘贴 JSON」顶到列表倒数两行上面，盖住金额。
+    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.BottomEnd) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            modifier = Modifier.padding(end = 16.dp, bottom = 84.dp),
         ) {
             TextButton(text = if (busy) "识别中…" else "粘贴 JSON", enabled = !busy, onClick = onPaste)
             Box(

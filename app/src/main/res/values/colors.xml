@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <color name="ic_launcher_background">#0E3B34</color>
+    <!-- 和 ui/Theme.kt 的 LightFq.paper 同值：窗口底色由系统画，Compose 首帧之前它就是用户看到的背景 -->
+    <color name="fq_window">#FFF4F2ED</color>
 </resources>

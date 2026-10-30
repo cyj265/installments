@@ -121,7 +121,13 @@ fun TickBlocks(
                 if (period.index == selected) {
                     Text(
                         text = period.index.toString(),
-                        color = if (period.paid || isCurrent) fq.surface else fq.ink,
+                        // 本期那格是深琥珀底，surface 在上面只有 1.15:1（亮）/1.28:1（暗）——
+                        // 数字等于没画。它必须是同一色系的 fg，两套主题才都成立。
+                        color = when {
+                            isCurrent -> fq.nowFg
+                            period.paid -> fq.surface
+                            else -> fq.ink
+                        },
                         style = TextStyle(fontSize = FqLabel, fontWeight = FontWeight.Medium),
                     )
                 }
@@ -421,13 +427,18 @@ fun LoanRow(loan: Loan, today: LocalDate, modifier: Modifier = Modifier, onClick
                 Spacer(Modifier.height(4.dp))
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Text(
-                        text = if (loan.status == LoanStatus.SETTLED) "已还 ${loan.paidCount} / ${loan.totalPeriods} 期"
-                        else "第 ${next?.index ?: loan.totalPeriods} / ${loan.totalPeriods} 期",
+                        text = (if (loan.status == LoanStatus.SETTLED) "已还 ${loan.paidCount} / ${loan.totalPeriods} 期"
+                        else "第 ${next?.index ?: loan.totalPeriods} / ${loan.totalPeriods} 期") +
+                            // 借呗这类没有单号、同平台多笔：放款日是唯一能一眼分清的线索
+                            (loan.tradeDate?.takeIf { loan.loanNo == null }?.let { " · ${monthDay(it)} 借" } ?: ""),
                         color = fq.muted,
                         style = TextStyle(fontSize = FqLabel),
                     )
                     Text(
-                        text = "${Money.formatWithSymbol(loan.perPeriodAmountCents)} · 余 ${Money.format(loan.remainingPayableCents)}",
+                        // 等额本金每期金额不同，这里给本期该还的数才有用
+                        text = (if (loan.amountsVary) "本期 ${Money.formatWithSymbol(loan.currentAmountCents)}"
+                        else Money.formatWithSymbol(loan.perPeriodAmountCents)) +
+                            " · 余 ${Money.format(loan.remainingPayableCents)}",
                         color = fq.ink,
                         style = TextStyle(fontSize = FqLabel),
                     )

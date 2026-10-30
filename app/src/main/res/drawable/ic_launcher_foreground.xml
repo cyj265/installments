@@ -1,31 +1,77 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 分期进度条意象：四根递增长条，末根用琥珀色标出当前期。 -->
+<!--
+  六段刻度环 + 中间一枚 ¥：环上的每一段就是一"期"，琥珀色的两段是已还，其余是待还。
+  踩过的两个坑：
+  1. 旧图标是四根递增长条，缩到桌面 48dp 会被读成手机信号格，所以不再用任何成排的竖条；
+  2. ¥ 的竖笔若从 V 字顶点继续往上出头，三根笔画顶端齐平就像三叉戟，所以竖笔从交点往下起笔。
+  几何都收在 66dp 安全圆内：环半径 23 + 描边 2.5 = 25.5 < 33。
+-->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
 
+    <!-- 已还：第 1、2 段，从正上方顺时针起算 -->
+    <path
+        android:pathData="M58.39,31.42 A23,23 0 0 1 71.36,38.91"
+        android:strokeColor="#F0B429"
+        android:strokeWidth="5"
+        android:strokeLineCap="round" />
+    <path
+        android:pathData="M75.75,46.51 A23,23 0 0 1 75.75,61.49"
+        android:strokeColor="#F0B429"
+        android:strokeWidth="5"
+        android:strokeLineCap="round" />
+
+    <!-- 待还：第 3–6 段，只比底色亮一档 -->
+    <path
+        android:pathData="M71.36,67.09 A23,23 0 0 1 58.39,76.58"
+        android:strokeColor="#2B4F47"
+        android:strokeWidth="5"
+        android:strokeLineCap="round" />
+    <path
+        android:pathData="M49.61,76.58 A23,23 0 0 1 36.64,67.09"
+        android:strokeColor="#2B4F47"
+        android:strokeWidth="5"
+        android:strokeLineCap="round" />
+    <path
+        android:pathData="M32.25,61.49 A23,23 0 0 1 32.25,46.51"
+        android:strokeColor="#2B4F47"
+        android:strokeWidth="5"
+        android:strokeLineCap="round" />
+    <path
+        android:pathData="M36.64,38.91 A23,23 0 0 1 49.61,31.42"
+        android:strokeColor="#2B4F47"
+        android:strokeWidth="5"
+        android:strokeLineCap="round" />
+
+    <!-- ¥：两条斜笔在 (54,48.5) 汇合，竖笔从交点往下 -->
     <group>
         <path
-            android:pathData="M30,74 L30,62"
-            android:strokeColor="#D9EAE4"
-            android:strokeWidth="9"
+            android:pathData="M54,48.5 L54,69"
+            android:strokeColor="#F4F2ED"
+            android:strokeWidth="5"
             android:strokeLineCap="round" />
         <path
-            android:pathData="M46,74 L46,54"
-            android:strokeColor="#D9EAE4"
-            android:strokeWidth="9"
+            android:pathData="M46,41 L54,49"
+            android:strokeColor="#F4F2ED"
+            android:strokeWidth="5"
             android:strokeLineCap="round" />
         <path
-            android:pathData="M62,74 L62,46"
-            android:strokeColor="#D9EAE4"
-            android:strokeWidth="9"
+            android:pathData="M62,41 L54,49"
+            android:strokeColor="#F4F2ED"
+            android:strokeWidth="5"
             android:strokeLineCap="round" />
         <path
-            android:pathData="M78,74 L78,34"
-            android:strokeColor="#F0B429"
-            android:strokeWidth="9"
+            android:pathData="M46.5,55 L61.5,55"
+            android:strokeColor="#F4F2ED"
+            android:strokeWidth="5"
+            android:strokeLineCap="round" />
+        <path
+            android:pathData="M46.5,61.5 L61.5,61.5"
+            android:strokeColor="#F4F2ED"
+            android:strokeWidth="5"
             android:strokeLineCap="round" />
     </group>
 </vector>

@@ -2,6 +2,8 @@ package com.cyj265.installments.ui
 
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.LocalContentColor
+import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Shapes
 import androidx.compose.material3.Typography
@@ -10,7 +12,7 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Immutable
-import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -44,11 +46,12 @@ private val LightFq = FqColors(
     surface = Color(0xFFFFFFFF),
     surface2 = Color(0xFFFAF9F6),
     ink = Color(0xFF14211E),
-    muted = Color(0xFF6C7C76),
-    line = Color(0xFFE4E1D8),
+    // muted 承担每一屏的次要行（日期、期数、金额副文案），11sp 上用它，低于 4.5:1 就直接糊掉
+    muted = Color(0xFF5D6E68),
+    line = Color(0xFFD2CEC1),
     brand = Color(0xFF0E3B34),
     onBrand = Color(0xFFF4F2ED),
-    done = Color(0xFF2E8B72),
+    done = Color(0xFF1F7A61),
     nowBg = Color(0xFFFBEFC9),
     nowFg = Color(0xFF8A5A00),
     lateBg = Color(0xFFF7E2DC),
@@ -62,7 +65,9 @@ private val DarkFq = FqColors(
     surface2 = Color(0xFF202B28),
     ink = Color(0xFFE9F1EC),
     muted = Color(0xFF97A8A1),
-    line = Color(0xFF2A3632),
+    // 分隔线只是"看得见有这条线"，不是文字，所以按非元素 3:1 都不要求；
+    // 但 1.44:1 时行与行完全没有边界，一屏小字会连成一片，故抬到 1.86。
+    line = Color(0xFF3A4742),
     brand = Color(0xFF8AD9BE),
     onBrand = Color(0xFF0C1715),
     done = Color(0xFF5CC8A3),
@@ -73,16 +78,27 @@ private val DarkFq = FqColors(
     tickIdle = Color(0xFF33403B),
 )
 
-val LocalFqColors = staticCompositionLocalOf { LightFq }
+/**
+ * 必须是 compositionLocalOf：调色板会随明暗切换变值。
+ * 之前用 staticCompositionLocalOf，它假定值永不变、换值时不通知读取方，于是系统从浅色切到深色后，
+ * 早就组合好的根容器还留着 LightFq.paper，之后新组合的卡片和刻度块已经是 DarkFq 了——
+ * 真机截图量到同一帧里 #F4F2ED 的页面压着 #19221F 的卡片，浅底上写浅字，整片文字看不见。
+ */
+val LocalFqColors = compositionLocalOf { LightFq }
 
-private val FqTypography = Typography(
-    displaySmall = TextStyle(fontSize = 30.sp, lineHeight = 34.sp, fontWeight = FontWeight.Medium, letterSpacing = (-0.5).sp, fontFeatureSettings = "tnum"),
-    titleMedium = TextStyle(fontSize = 15.sp, lineHeight = 21.sp, fontWeight = FontWeight.Medium),
-    titleSmall = TextStyle(fontSize = 13.sp, lineHeight = 18.sp, fontWeight = FontWeight.Medium),
-    bodyMedium = TextStyle(fontSize = 13.sp, lineHeight = 19.sp, fontWeight = FontWeight.Normal, fontFeatureSettings = "tnum"),
-    bodySmall = TextStyle(fontSize = 12.sp, lineHeight = 17.sp, fontWeight = FontWeight.Normal, fontFeatureSettings = "tnum"),
-    labelMedium = TextStyle(fontSize = 11.sp, lineHeight = 15.sp, fontWeight = FontWeight.Normal, fontFeatureSettings = "tnum"),
-    labelSmall = TextStyle(fontSize = 11.sp, lineHeight = 14.sp, fontWeight = FontWeight.Normal),
+/**
+ * 每个文字样式都必须自带颜色。Text 只传 `style = TextStyle(fontSize = …)` 时，
+ * 色值一路退到 LocalTextStyle，再退到平台默认的纯黑——浅色模式看不出来，
+ * 暗色模式下黑字压黑底直接隐形，实测截图里那批「看不太清」的数字就是这么来的。
+ */
+private fun fqTypography(fq: FqColors) = Typography(
+    displaySmall = TextStyle(color = fq.ink, fontSize = 30.sp, lineHeight = 34.sp, fontWeight = FontWeight.Medium, letterSpacing = (-0.5).sp, fontFeatureSettings = "tnum"),
+    titleMedium = TextStyle(color = fq.ink, fontSize = 15.sp, lineHeight = 21.sp, fontWeight = FontWeight.Medium),
+    titleSmall = TextStyle(color = fq.ink, fontSize = 13.sp, lineHeight = 18.sp, fontWeight = FontWeight.Medium),
+    bodyMedium = TextStyle(color = fq.ink, fontSize = 13.sp, lineHeight = 19.sp, fontWeight = FontWeight.Normal, fontFeatureSettings = "tnum"),
+    bodySmall = TextStyle(color = fq.ink, fontSize = 12.sp, lineHeight = 17.sp, fontWeight = FontWeight.Normal, fontFeatureSettings = "tnum"),
+    labelMedium = TextStyle(color = fq.ink, fontSize = 11.sp, lineHeight = 15.sp, fontWeight = FontWeight.Normal, fontFeatureSettings = "tnum"),
+    labelSmall = TextStyle(color = fq.ink, fontSize = 11.sp, lineHeight = 14.sp, fontWeight = FontWeight.Normal),
 )
 
 private val FqShapes = Shapes(
@@ -117,7 +133,18 @@ fun FqTheme(darkTheme: Boolean = isSystemInDarkTheme(), content: @Composable () 
             error = fq.lateFg,
         )
     }
+    val typography = fqTypography(fq)
     CompositionLocalProvider(LocalFqColors provides fq) {
-        MaterialTheme(colorScheme = scheme, typography = FqTypography, shapes = FqShapes, content = content)
+        MaterialTheme(colorScheme = scheme, typography = typography, shapes = FqShapes) {
+            // 界面里大量 Text 只写 `style = TextStyle(fontSize = …)`。注意：显式传 style 时
+            // material3 的 Text 不会读 LocalTextStyle（那个参数只在该形参没传时才生效），
+            // 于是 color 一路 Unspecified，最后落到 BasicText 的兜底——LocalContentColor，
+            // 而它的默认值是纯黑。只提供 LocalTextStyle 治不到这批调用，必须提供 LocalContentColor。
+            CompositionLocalProvider(
+                LocalTextStyle provides typography.bodyMedium,
+                LocalContentColor provides fq.ink,
+                content = content,
+            )
+        }
     }
 }

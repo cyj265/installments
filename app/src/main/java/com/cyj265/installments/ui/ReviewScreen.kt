@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -15,6 +16,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -25,8 +27,14 @@ import com.cyj265.installments.data.Money
 import com.cyj265.installments.domain.DraftMatch
 import com.cyj265.installments.domain.FindingLevel
 import com.cyj265.installments.domain.LoanAssembler
+import com.cyj265.installments.domain.LoanIdentity
+import com.cyj265.installments.domain.LoanIdentity.StatementKind
 import com.cyj265.installments.domain.LoanValidator
+import com.cyj265.installments.domain.currentPeriodOn
 import com.cyj265.installments.domain.matchLoan
+import com.cyj265.installments.domain.paidThroughOn
+import java.time.YearMonth
+import java.time.temporal.ChronoUnit
 
 /**
  * 屏 2：识别确认。入库前唯一的人工关口，所以把校验当主角：
@@ -95,7 +103,7 @@ private fun DraftCard(
     onDiscard: () -> Unit,
     onBack: () -> Unit,
 ) {
-    val findings = remember(draft) { LoanValidator.validateDraft(draft) }
+    val findings = remember(draft, state.today) { LoanValidator.validateDraft(draft, state.today) }
     val errorFields = findings.filter { it.level == FindingLevel.ERROR }.mapNotNull { it.field }.toSet()
     val assembled = remember(draft) { LoanAssembler.fromDraft(draft, now = state.today) }
     // 对账键一律取 assembled，和 commitDraft 用的是同一套，避免页面提示与实际入库结果不一致
@@ -107,9 +115,12 @@ private fun DraftCard(
             perPeriodAmountCents = assembled.perPeriodAmountCents,
             dueDayOfMonth = assembled.dueDayOfMonth,
             totalPeriods = assembled.totalPeriods,
+            tradeDate = assembled.tradeDate,
+            principalTotalCents = assembled.principalTotalOrNull,
         )
     }
     var principalDismissed by rememberSaveable("${index}-pd") { mutableStateOf(false) }
+    var planExpanded by rememberSaveable("${index}-plan") { mutableStateOf(false) }
 
     Column(modifier = Modifier.fillMaxWidth().padding(top = 14.dp)) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -129,28 +140,122 @@ private fun DraftCard(
             viewModel.updateDraft(index, draft.copy(loanNo = v.trim().takeIf { s -> s.isNotEmpty() }))
         }
         IntFieldRow("总期数", draft.totalPeriods, errorFields.contains("totalPeriods")) { v -> viewModel.updateDraft(index, draft.copy(totalPeriods = v)) }
+        // 借呗这类页面上没有「X/Y 期」，只写还剩几期，所以这一格是减法的一半；
+        // 人一旦改过它，模型抄来的当前期和已还期号都得让位。
+        IntFieldRow("剩余期数", draft.remainingPeriods, errorFields.contains("remainingPeriods")) { v ->
+            viewModel.updateDraft(index, draft.copy(remainingPeriods = v, currentPeriod = null, paidPeriods = null))
+        }
         // 人一旦当场改过，模型抄来的 paidPeriods 就必须让位——它经常是把「已摊销期数」当成已还
-        IntFieldRow("当前期", draft.currentPeriod, errorFields.contains("currentPeriod")) { v ->
-            viewModel.updateDraft(index, draft.copy(currentPeriod = v, paidPeriods = null))
+        // 有交易日期、账单日、还款日时当前期按还款日算：卡分期页的「剩余期数」是未出账期数，
+        // 用总−剩余+1 会把还没到期的一期标成已还。
+        IntFieldRow("当前期", draft.currentPeriodOn(state.today) ?: draft.currentPeriodOrDerived, errorFields.contains("currentPeriod")) { v ->
+            viewModel.updateDraft(index, draft.copy(currentPeriod = v, paidPeriods = null, remainingPeriods = null))
         }
-        IntFieldRow("已还到第几期", draft.paidThrough, errorFields.contains("currentPeriod")) { v ->
-            if (v != null) viewModel.updateDraft(index, draft.copy(currentPeriod = v + 1, paidPeriods = null))
+        IntFieldRow("已还到第几期", draft.paidThroughOn(state.today), errorFields.contains("currentPeriod")) { v ->
+            if (v != null) viewModel.updateDraft(index, draft.copy(currentPeriod = v + 1, paidPeriods = null, remainingPeriods = null))
         }
-        FieldRow("每期金额", draft.perPeriodAmount ?: "", errorFields.contains("perPeriodAmount")) { v ->
-            viewModel.updateDraft(index, draft.copy(perPeriodAmount = v))
+        // 逐期计划完整时每期金额各有各的，单独一个「每期金额」既改不动计划、又会误导人去改
+        if (draft.completePlan != null) {
+            Text(
+                text = "每期金额：按逐期计划照抄，首期 ${Money.formatWithSymbol(assembled.periods.first().amountCents)} → " +
+                    "末期 ${Money.formatWithSymbol(assembled.periods.last().amountCents)}，不再均摊",
+                color = LocalFqColors.current.muted,
+                style = TextStyle(fontSize = FqLabel),
+                modifier = Modifier.padding(top = 8.dp, bottom = 2.dp),
+            )
+        } else {
+            FieldRow("每期金额", draft.perPeriodAmount ?: "", errorFields.contains("perPeriodAmount")) { v ->
+                viewModel.updateDraft(index, draft.copy(perPeriodAmount = v))
+            }
         }
         FieldRow("未还本金", draft.principalOutstanding ?: "", errorFields.contains("principalOutstanding")) { v ->
             viewModel.updateDraft(index, draft.copy(principalOutstanding = v))
         }
-        IntFieldRow("还款日", draft.dueDayOfMonth, errorFields.contains("dueDayOfMonth"), placeholder = "每月几号") { v -> viewModel.updateDraft(index, draft.copy(dueDayOfMonth = v)) }
+        // 银行的「商品金额」和「剩余未摊销金额」常并排写在同一屏，抄混了总额和息费会一起错
+        FieldRow("借款本金", draft.principalTotal ?: "", errorFields.contains("principalTotal"), placeholder = "整笔借了多少，可留空") { v ->
+            viewModel.updateDraft(index, draft.copy(principalTotal = v.trim().takeIf { s -> s.isNotEmpty() }))
+        }
+
+        // 每期 × 期数 与 借款本金 摆在一行：每期金额漏掉手续费时，两个数会几乎相等、总息费趋近 0，一眼就看出来
+        val planTotal = assembled.planTotalCents
+        if (planTotal > 0) {
+            val principalTotal = Money.parseCents(draft.principalTotal)
+            Text(
+                text = buildString {
+                    if (assembled.amountsVary) {
+                        append("逐期 ${assembled.periods.size} 期合计 ${Money.formatWithSymbol(planTotal)}")
+                        append("｜首期 ${Money.format(assembled.periods.first().amountCents)} → 末期 ${Money.format(assembled.periods.last().amountCents)}")
+                    } else {
+                        append("${assembled.totalPeriods} 期 × ${Money.formatWithSymbol(assembled.perPeriodAmountCents)} = ${Money.formatWithSymbol(planTotal)}")
+                    }
+                    if (principalTotal != null) {
+                        append("｜本金 ${Money.formatWithSymbol(principalTotal)}｜总息费 ${Money.formatWithSymbol((planTotal - principalTotal).coerceAtLeast(0L))}")
+                    }
+                },
+                color = LocalFqColors.current.muted,
+                style = TextStyle(fontSize = FqLabel),
+                modifier = Modifier.padding(top = 6.dp),
+            )
+        }
+        // 逐期计划是照抄的，得让人知道这次不是「每期金额 × 期数」摊出来的
+        if (draft.completePlan != null && assembled.amountsVary) {
+            val first = assembled.periods.first().amountCents
+            val last = assembled.periods.last().amountCents
+            // 末期常常只差几分钱（凑整），写成「降到」会自相矛盾
+            val trend = if (last < first) "降到" else if (last > first) "升到" else "到"
+            AlertBox(
+                text = "按截图上的逐期计划原样入库：共 ${assembled.periods.size} 期，合计 ${Money.formatWithSymbol(planTotal)}，" +
+                    "每期从 ${Money.formatWithSymbol(first)} $trend ${Money.formatWithSymbol(last)}。" +
+                    "不再用「每期金额 × 期数」摊，剩余本金与息费也按逐期数字算。",
+                kind = ChipKind.NEUTRAL,
+                modifier = Modifier.padding(top = 10.dp),
+            )
+        }
+        // 「照抄」得能逐行核对：摘要只能证明合计对，36 期里错一行看不出来
+        val datedPlan = draft.completePlan
+        if (datedPlan != null || draft.planWithoutDates != null) {
+            TextButton(
+                text = if (planExpanded) "收起逐期计划" else "查看逐期计划（${assembled.periods.size} 期）",
+                onClick = { planExpanded = !planExpanded },
+                modifier = Modifier.padding(top = 8.dp),
+            )
+            if (planExpanded) PlanPreview(assembled, datesFromScreenshot = datedPlan != null)
+        }
+        FieldRow("交易日期", draft.tradeDate ?: "", errorFields.contains("tradeDate"), placeholder = "分期付款交易日期，如 2026-08-25") { v ->
+            viewModel.updateDraft(index, draft.copy(tradeDate = v.trim().takeIf { s -> s.isNotEmpty() }))
+        }
+        IntFieldRow("账单日", draft.statementDay, errorFields.contains("statementDay"), placeholder = "每月几号出账，如 15；现金借款（借呗等）留空") { v ->
+            viewModel.updateDraft(index, draft.copy(statementDay = v))
+        }
+        IntFieldRow("还款日", draft.dueDayOfMonth, errorFields.contains("dueDayOfMonth"), placeholder = "每月几号，如 15") { v -> viewModel.updateDraft(index, draft.copy(dueDayOfMonth = v)) }
         FieldRow("下期还款日", draft.nextDueDate ?: "", errorFields.contains("nextDueDate"), placeholder = "可留空，如 2026-11-10") { v ->
             viewModel.updateDraft(index, draft.copy(nextDueDate = v.trim().takeIf { s -> s.isNotEmpty() }))
         }
 
-        // 只填「每月几号」时，具体日期是推算出来的；不摊开给人看，就没法确认推的是不是那个月
-        if (draft.nextDueDateParsed == null && draft.dueDayOfMonth != null && assembled.periods.isNotEmpty()) {
+        // 只填「每月几号」时，具体日期是推算出来的；首期尤其要摊开——月份是从下期往前倒推的，
+        // 倒推的月份和日号一起错时，只有首期日期能让人一眼看出整条计划表歪了。
+        if (draft.completePlan == null && draft.nextDueDateParsed == null && draft.dueDayOfMonth != null && assembled.periods.isNotEmpty()) {
+            val trade = draft.tradeDateParsed
+            // 借呗这类现金借款即使模型抄了个账单日进来，首期也按放款日推，页面提示得跟着走
+            val kind = LoanIdentity.statementKind(draft.institution)
+            val hasStatement = draft.statementDay != null && kind != StatementKind.CASH_LOAN
+            val fromCycle = trade != null && hasStatement
+            val fromLoanDate = trade != null && !hasStatement
             AlertBox(
-                text = "按每月 ${draft.dueDayOfMonth} 日推算：下期 ${assembled.nextUnpaid?.dueDate ?: "无"}，末期 ${assembled.periods.last().dueDate}。对不上就改「还款日」，或直接填完整日期。",
+                text = buildString {
+                    when {
+                        fromCycle -> append("按交易 $trade → 账单日 ${draft.statementDay} 日 → 还款日 ${draft.dueDayOfMonth} 日推算出首期 ")
+                        // 借呗没有账单日：首期就是放款后的第一个还款日，不足 15 天顺延一个月
+                        fromLoanDate && kind == StatementKind.CASH_LOAN ->
+                            append("按放款日 $trade、每月 ${draft.dueDayOfMonth} 日推算出首期（现金借款没有账单日，支用日离还款日不足 15 天时首期排到下个月）")
+                        fromLoanDate ->
+                            append("没读到账单日，先按放款日 $trade、每月 ${draft.dueDayOfMonth} 日推算首期。" +
+                                "如果这其实是先出账、后还款的产品（信用卡、花呗这类），把账单日填上，首期月份会跟着重算")
+                        else -> append("按每月 ${draft.dueDayOfMonth} 日推算")
+                    }
+                    append("：首期 ${assembled.periods.first().dueDate}、下期 ${assembled.nextUnpaid?.dueDate ?: "无"}、" +
+                        "末期 ${assembled.periods.last().dueDate}。对不上就改上面几个日期，或直接填完整的下期还款日。")
+                },
                 kind = ChipKind.NEUTRAL,
                 modifier = Modifier.padding(top = 10.dp),
             )
@@ -172,9 +277,11 @@ private fun DraftCard(
 
         // 口径不符提示：模型抄的"未还本金"和按剩余期数算出来的应还合计对不上。
         // 只在字段级 ERROR 已清掉之后再谈口径，否则期数本身就是残缺的，比出个错数只会误导。
+        // 信用卡分期的「剩余未摊销金额」只含未出账的那一期，按定义就小于剩余应还，不能拿这条比。
+        // 逐期金额不同时「每期金额」只是首期，拿它做「多正好一期」的判断会误报，整条口径比对都不做。
         val principal = Money.parseCents(draft.principalOutstanding)
         val payable = assembled.remainingPayableCents
-        if (!principalDismissed && errorFields.isEmpty() && principal != null && principal != payable) {
+        if (!principalDismissed && assembled.statementDay == null && errorFields.isEmpty() && !assembled.amountsVary && principal != null && principal != payable) {
             val gap = payable - principal
             val onePeriod = assembled.perPeriodAmountCents
             AlertBox(
@@ -193,8 +300,8 @@ private fun DraftCard(
                     TextButton(text = "保留 ${Money.format(principal)}", onClick = { principalDismissed = true })
                     if (gap == onePeriod && onePeriod > 0) {
                         TextButton(
-                            text = "当前期改 ${(draft.currentPeriod ?: 1) + 1}",
-                            onClick = { viewModel.updateDraft(index, draft.copy(currentPeriod = (draft.currentPeriod ?: 1) + 1)) },
+                            text = "当前期改 ${(draft.currentPeriodOn(state.today) ?: 1) + 1}",
+                            onClick = { viewModel.updateDraft(index, draft.copy(currentPeriod = (draft.currentPeriodOn(state.today) ?: 1) + 1)) },
                         )
                     }
                 },
@@ -245,6 +352,74 @@ private fun DupAlert(existing: Loan, reason: String) {
         kind = ChipKind.NEUTRAL,
         modifier = Modifier.padding(top = 10.dp),
     )
+}
+
+/**
+ * 确认页的逐期明细。日期和金额必看；本金/利息只有抄到了才显示，不拿推算值冒充原文。
+ * 期与期之间不是正好一个月的，整行标红——那通常意味着某一期的日期抄错了。
+ */
+@Composable
+private fun PlanPreview(loan: Loan, datesFromScreenshot: Boolean) {
+    val fq = LocalFqColors.current
+    Column(modifier = Modifier.fillMaxWidth().padding(top = 2.dp)) {
+        if (!datesFromScreenshot) {
+            Text(
+                text = "金额、本金、利息是截图原文；页面没有应还日这一栏，日期是按首期 + 每月推的。",
+                color = fq.muted,
+                style = TextStyle(fontSize = FqLabel),
+                modifier = Modifier.padding(bottom = 4.dp),
+            )
+        }
+        loan.periods.forEachIndexed { i, period ->
+            // 比的是年月，不是天数：末期从 21 号提前到 16 号是正常的尾期调整，
+            // 直接比 LocalDate 会按天截断算成「隔 0 个月」而误标红
+            val months = if (i == 0) 1L else ChronoUnit.MONTHS.between(
+                YearMonth.from(loan.periods[i - 1].dueDate),
+                YearMonth.from(period.dueDate),
+            )
+            val irregular = months != 1L
+            Column(modifier = Modifier.fillMaxWidth().padding(vertical = 5.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = period.index.toString(),
+                        color = fq.muted,
+                        style = TextStyle(fontSize = FqLabel),
+                        modifier = Modifier.width(22.dp),
+                    )
+                    Text(
+                        text = period.dueDate.toString() + if (irregular) "（隔 $months 个月）" else "",
+                        color = if (irregular) fq.lateFg else fq.ink,
+                        style = TextStyle(fontSize = FqBodySmall),
+                        modifier = Modifier.weight(1f),
+                    )
+                    Text(
+                        text = Money.formatWithSymbol(period.amountCents),
+                        color = if (irregular) fq.lateFg else fq.ink,
+                        style = TextStyle(fontSize = FqBodySmall),
+                    )
+                }
+                if (period.principalCents != null || period.interestCents != null) {
+                    Text(
+                        text = buildString {
+                            period.principalCents?.let { append("本金 ${Money.format(it)}") }
+                            period.interestCents?.let {
+                                if (isNotEmpty()) append(" · ")
+                                append("息费 ${Money.format(it)}")
+                            }
+                        },
+                        color = fq.muted,
+                        style = TextStyle(fontSize = FqLabel),
+                        modifier = Modifier.padding(start = 30.dp, top = 1.dp),
+                    )
+                }
+            }
+            if (i < loan.periods.lastIndex) DividerLine()
+        }
+    }
 }
 
 @Composable

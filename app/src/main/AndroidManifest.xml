@@ -3,6 +3,10 @@
 
     <!-- 识别走云端视觉模型；不装第三方 SDK，也不申请相册权限（Photo Picker 选图不需要）。 -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- 还款日提醒靠写系统日历：事件由日历自己管闹钟，绕开国产 ROM 压后台。
+         只在「我的 → 提醒 → 写入本机日历」被打开时才申请。 -->
+    <uses-permission android:name="android.permission.READ_CALENDAR" />
+    <uses-permission android:name="android.permission.WRITE_CALENDAR" />
 
     <application
         android:allowBackup="true"

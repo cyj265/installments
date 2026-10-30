@@ -1,8 +1,12 @@
 package com.cyj265.installments.ui
 
+import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.pm.PackageManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -39,12 +43,16 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import com.cyj265.installments.data.Money
 import com.cyj265.installments.data.VisionRecognizer
 import com.cyj265.installments.domain.DueItem
 import com.cyj265.installments.domain.Portfolio
+import java.text.SimpleDateFormat
 import java.time.LocalDate
 import java.time.YearMonth
+import java.util.Date
+import java.util.Locale
 
 /** 屏 1：总览。默认落地页，负债全貌 + 进行中的分期。 */
 @Composable
@@ -62,9 +70,11 @@ fun OverviewScreen(
         )
     }
     val settled = state.loans.filter { active.none { a -> a.id == it.id } }
+    // 导入时标的已还期没有还款日期（paidOn 为空），只认 paidOn 会让「本月已还」永远是 0。
+    // 退到应还日：应还日落在本月且已还清，就算本月还掉的——没有真实日期时这是唯一可用的锚。
     val paidThisMonth = state.loans.sumOf { loan ->
-        loan.periods.count { it.paid && it.paidOn != null && YearMonth.from(it.paidOn) == YearMonth.from(state.today) }
-            .toLong() * loan.perPeriodAmountCents
+        loan.periods.filter { it.paid && YearMonth.from(it.paidOn ?: it.dueDate) == YearMonth.from(state.today) }
+            .sumOf { it.amountCents }
     }
 
     LazyColumn(modifier = modifier.fillMaxWidth().padding(horizontal = 14.dp)) {
@@ -131,7 +141,9 @@ fun OverviewScreen(
                 }
             }
         }
-        item { Spacer(Modifier.height(80.dp)) }
+        // FAB 浮在列表上方（底边 84dp + 高 52dp），这里的留白必须比它高，
+        // 否则滑到底时最后几行的金额会被「＋ / 粘贴 JSON」压住。
+        item { Spacer(Modifier.height(140.dp)) }
     }
 }
 
@@ -170,7 +182,8 @@ fun CalendarScreen(
     var selected by rememberSaveable(state.today) { mutableStateOf(state.today.toString()) }
     val selectedDate = runCatching { LocalDate.parse(selected) }.getOrDefault(state.today)
     val items = dues[selectedDate].orEmpty()
-    val summary = remember(state.loans, state.today) { Portfolio.summarize(state.loans, state.today) }
+    // 跟着正在看的月份走：翻到 11 月时这里必须变成 11 月的数，否则「本月合计」会跟日历对不上。
+    val monthTotal = remember(dues) { dues.values.flatten().sumOf { it.period.amountCents } }
     val next90 = remember(state.loans, state.today) {
         Portfolio.dues(state.loans, state.today, state.today.plusDays(90)).values.flatten().sumOf { it.period.amountCents }
     }
@@ -219,7 +232,10 @@ fun CalendarScreen(
                                 text = day.dayOfMonth.toString(),
                                 color = when {
                                     isSel -> fq.onBrand
-                                    !inMonth -> fq.tickIdle
+                                    // 上月/下月的日子要淡，但不能用 tickIdle：那是块底色，
+                                    // 拿来当字色在两套主题上都只有 1.2~1.7:1，数字等于没画。
+                                    // 淡一级交给 muted，和当月 ink 拉开即可。
+                                    !inMonth -> fq.muted
                                     else -> fq.ink
                                 },
                                 style = TextStyle(fontSize = FqBodySmall),
@@ -255,7 +271,7 @@ fun CalendarScreen(
         Spacer(Modifier.height(8.dp))
         DividerLine()
         Row(modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp)) {
-            Metric(Money.formatWithSymbol(summary.monthPayableCents), "本月合计", Modifier.weight(1f))
+            Metric(Money.formatWithSymbol(monthTotal), "${month.monthValue} 月合计", Modifier.weight(1f))
             Metric(Money.formatWithSymbol(next90), "未来 90 天", Modifier.weight(1f), divider = true)
             Metric("$nextMonthCount 笔", "${month.plusMonths(1).monthValue} 月到期", Modifier.weight(1f), divider = true)
         }
@@ -296,7 +312,11 @@ fun SettingsScreen(
     val summary = remember(state.loans, state.today) { Portfolio.summarize(state.loans, state.today) }
     val context = LocalContext.current
     val version = remember {
-        runCatching { context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "0.1.0" }.getOrDefault("0.1.0")
+        runCatching {
+            val info = context.packageManager.getPackageInfo(context.packageName, 0)
+            val stamp = SimpleDateFormat("MM-dd HH:mm", Locale.CHINA).format(Date(info.lastUpdateTime))
+            "${info.versionName ?: "0.1.0"} · 装于 $stamp"
+        }.getOrDefault("0.1.0")
     }
     // 配置项不是 StateFlow，直接绑到 SharedPreferences 会出现"打字看不见"的问题，所以先落本地状态再写回
     var baseUrl by remember { mutableStateOf(viewModel.settings.baseUrl) }
@@ -304,6 +324,15 @@ fun SettingsScreen(
     var apiKey by remember { mutableStateOf(viewModel.settings.apiKey) }
     var promptOpen by remember { mutableStateOf(false) }
     val ready = baseUrl.isNotBlank() && model.isNotBlank() && apiKey.isNotBlank()
+    val calendarPermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions(),
+    ) { grants ->
+        if (grants[Manifest.permission.WRITE_CALENDAR] == true) {
+            viewModel.setCalendarSync(true)
+        } else {
+            viewModel.showMessage("没给日历权限，写不进去。可以去系统设置 → 应用 → 分期管家 → 权限里打开「日历」")
+        }
+    }
     LazyColumn(modifier = modifier.fillMaxWidth().padding(horizontal = 14.dp)) {
         item {
             Spacer(Modifier.height(10.dp))
@@ -333,23 +362,23 @@ fun SettingsScreen(
                 },
                 modifier = Modifier.padding(top = 10.dp),
             )
+            val copyPrompt = {
+                val clip = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                clip.setPrimaryClip(ClipData.newPlainText("识别指令", VisionRecognizer.PROMPT))
+                viewModel.showMessage("指令已复制。模型回答的 JSON 原样贴回「粘贴 JSON 导入」即可")
+            }
+            // 指令有两三千字，复制按钮必须挂在行上：点开再滚到底才复制得了，等于每次都要翻一遍
             ActionRow(
                 "发给模型的指令",
                 if (promptOpen) "收起" else "没有 Key 时，把这段和截图一起发给任意视觉模型",
                 onClick = { promptOpen = !promptOpen },
+                trailing = { TextButton(text = "复制", onClick = copyPrompt) },
             )
             if (promptOpen) {
                 AlertBox(
                     text = VisionRecognizer.PROMPT,
                     kind = ChipKind.NEUTRAL,
                     modifier = Modifier.padding(top = 10.dp),
-                    actions = {
-                        TextButton(text = "复制这段指令", onClick = {
-                            val clip = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                            clip.setPrimaryClip(ClipData.newPlainText("识别指令", VisionRecognizer.PROMPT))
-                            viewModel.showMessage("指令已复制。模型回答的 JSON 原样贴回「粘贴 JSON 导入」即可")
-                        })
-                    },
                 )
             }
         }
@@ -362,8 +391,37 @@ fun SettingsScreen(
             SettingText("路径", viewModel.dataFilePath())
         }
         item {
-            SectionTitle("提醒", "第二期")
-            SettingText("还款日提醒", "关闭")
+            SectionTitle("提醒", if (state.calendarEnabled) "已开启" else "关闭")
+            ActionRow(
+                "写入本机日历",
+                if (state.calendarEnabled) {
+                    "已写入 ${state.calendarCount} 期未还还款日 · 点此关闭并清理"
+                } else {
+                    "每期还款日写进系统日历，当天早上 9 点提醒"
+                },
+                onClick = {
+                    if (state.calendarEnabled) {
+                        viewModel.setCalendarSync(false)
+                    } else if (ContextCompat.checkSelfPermission(context, Manifest.permission.WRITE_CALENDAR) == PackageManager.PERMISSION_GRANTED) {
+                        viewModel.setCalendarSync(true)
+                    } else {
+                        calendarPermission.launch(
+                            arrayOf(Manifest.permission.WRITE_CALENDAR, Manifest.permission.READ_CALENDAR),
+                        )
+                    }
+                },
+            )
+            AlertBox(
+                text = "在 App 里点「已还」，日历里那一期会自动删掉；改金额、改日期也会跟着更新。" +
+                    "反过来不行：Android 没有公开的待办完成接口，在日历里打勾 App 读不到——你在日历里手动删掉的事件，下次打开 App 会提示一次，由你自己确认是否已还。",
+                modifier = Modifier.padding(top = 10.dp),
+            )
+            if (state.calendarEnabled) {
+                SettingText("检测到的日历", state.calendarSummary ?: "—")
+                state.calendarProblem?.let {
+                    AlertBox(text = it, kind = ChipKind.LATE, modifier = Modifier.padding(top = 10.dp))
+                }
+            }
             SettingText("版本", version)
             Spacer(Modifier.height(80.dp))
         }
@@ -411,7 +469,7 @@ private fun SettingText(label: String, value: String) {
 }
 
 @Composable
-private fun ActionRow(label: String, hint: String, onClick: () -> Unit) {
+private fun ActionRow(label: String, hint: String, onClick: () -> Unit, trailing: (@Composable () -> Unit)? = null) {
     val fq = LocalFqColors.current
     Column(modifier = Modifier.fillMaxWidth().clickable(onClick = onClick)) {
         DividerLine()
@@ -424,6 +482,7 @@ private fun ActionRow(label: String, hint: String, onClick: () -> Unit) {
                 Text(text = label, style = TextStyle(fontSize = FqBody))
                 Text(text = hint, color = fq.muted, style = TextStyle(fontSize = FqLabel))
             }
+            trailing?.invoke()
             Text(text = "›", color = fq.muted, style = TextStyle(fontSize = FqBody))
         }
     }

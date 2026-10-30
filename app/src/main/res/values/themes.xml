@@ -1,4 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.Installments" parent="android:Theme.Material.Light.NoActionBar" />
+    <!--
+      状态栏图标必须由这里说了算：平台 Light 主题默认 windowLightStatusBar=false，
+      也就是白色图标——压在浅米色页面上，状态栏整条直接看不见。
+    -->
+    <style name="Theme.Installments" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/fq_window</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">true</item>
+    </style>
 </resources>

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      深色下换整套窗口底色和状态栏图标色。少了这个目录，系统切到深色模式时
+      Compose 读 isSystemInDarkTheme() 走暗色板，而窗口底色、状态栏图标还留在浅色主题上，
+      于是一屏里半深半浅——真机截图量出来正是这个：页面 #F4F2ED，卡片 #19221F。
+    -->
+    <style name="Theme.Installments" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/fq_window</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+</resources>
