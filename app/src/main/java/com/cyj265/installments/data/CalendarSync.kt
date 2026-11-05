@@ -106,12 +106,22 @@ class CalendarSync(private val context: Context, private val settings: SettingsS
         }
         val expected = CalendarPlan.entries(loans, ZoneId.systemDefault())
         val expectedMarkers = expected.map { it.marker }.toSet()
+        // 先迁掉旧版挂在「假账户」下的日历，否则它们迟早会被系统按「账户不存在」整批清掉。
+        val migrated = runCatching { removeLegacyCalendars() }.getOrDefault(0) > 0
+        if (migrated) {
+            settings.calendarOwnId = -1L
+            settings.calendarWritten = emptySet()
+        }
         val rows = readCalendars()
         val summary = summarize(rows)
         val existing = runCatching { existingMarkers() }.getOrElse {
             return SyncOutcome(error = "读不到日历事件：${it.describe()}", calendars = summary)
         }
-        val vanished = CalendarPlan.vanishedMarkers(settings.calendarWritten, existing, expectedMarkers)
+        val vanished = if (migrated) {
+            emptyList()
+        } else {
+            CalendarPlan.vanishedMarkers(settings.calendarWritten, existing, expectedMarkers)
+        }
 
         // 整体重建：先删掉自己上次写的，再按「当前未还」写一遍。已还的期因此自然消失，
         // 重复写入、改金额、改日期也都跟着一次同步走完。
@@ -129,7 +139,7 @@ class CalendarSync(private val context: Context, private val settings: SettingsS
         var created = false
         val remembered = settings.calendarOwnId
         if (remembered > 0) {
-            val attempt = runCatching { insertEvent(remembered, probe, viaSyncAdapter = true) }
+            val attempt = tryWrite(remembered, probe, preferSyncAdapter = true)
             runCatching { deleteOurs() }
             if (attempt.isSuccess) {
                 target = CalendarRow(remembered, OWN_NAME, CalendarContract.Calendars.CAL_ACCESS_OWNER, primary = false)
@@ -140,7 +150,7 @@ class CalendarSync(private val context: Context, private val settings: SettingsS
         }
         if (target == null) {
             for (row in rows.sortedByDescending { it.accessLevel }) {
-                val attempt = runCatching { insertEvent(row.id, probe, viaSyncAdapter = false) }
+                val attempt = tryWrite(row.id, probe, preferSyncAdapter = false)
                 runCatching { deleteOurs() }
                 if (attempt.isSuccess) {
                     target = row
@@ -169,7 +179,7 @@ class CalendarSync(private val context: Context, private val settings: SettingsS
         val written = mutableSetOf<String>()
         var writeError: String? = null
         expected.forEach { entry ->
-            runCatching { insertEvent(chosen.id, entry, viaSyncAdapter = ownCalendar) }
+            tryWrite(chosen.id, entry, preferSyncAdapter = ownCalendar)
                 .onSuccess { written += entry.marker }
                 .onFailure { writeError = it.describe() }
         }
@@ -201,14 +211,24 @@ class CalendarSync(private val context: Context, private val settings: SettingsS
         return out
     }
 
+    /** 先把事件写进指定的日历；普通入口被账户校验挡下，再试同步适配器入口。 */
+    private fun tryWrite(calendarId: Long, entry: CalendarEntry, preferSyncAdapter: Boolean): Result<Unit> =
+        runCatching { insertEvent(calendarId, entry, viaSyncAdapter = preferSyncAdapter) }
+            .recoverCatching { insertEvent(calendarId, entry, viaSyncAdapter = !preferSyncAdapter) }
+
     private fun deleteOurs(): Int {
         val direct = runCatching {
             resolver.delete(CalendarContract.Events.CONTENT_URI, CUSTOM_SELECTION, OURS_ONLY)
         }.getOrDefault(0)
         if (direct > 0) return direct
         // 自建日历里的事件归我们的账户，普通入口删不掉，得再走一次同步适配器入口。
-        return runCatching {
+        val own = runCatching {
             resolver.delete(syncAdapterUri(CalendarContract.Events.CONTENT_URI), CUSTOM_SELECTION, OURS_ONLY)
+        }.getOrDefault(0)
+        if (own > 0) return own
+        // 旧版假账户下的残留事件
+        return runCatching {
+            resolver.delete(legacyEventsUri(), CUSTOM_SELECTION, OURS_ONLY)
         }.getOrDefault(0)
     }
 
@@ -238,14 +258,16 @@ class CalendarSync(private val context: Context, private val settings: SettingsS
     }
 
     /**
-     * 用同步适配器入口建一个自己的日历：ACCOUNT_NAME 固定成 App 包名，这样重装/再同步都能认回来。
+     * 用「本地账户」建自己的日历。账户类型必须是系统认识的 [CalendarContract.ACCOUNT_TYPE_LOCAL]：
+     * 早期版本拿包名当账户类型，CalendarProvider 监听账户变化时会把「AccountManager 里不存在」的账户
+     * 连带其日历和事件整批清掉，表现就是过一阵子日历里的事自己没了。
      * 这条路径不需要真的实现 SyncAdapter，只是借它拿到「可写」的日历行。
      */
     private fun ensureOwnCalendar(): CalendarRow? {
         findOwnCalendar()?.let { return it }
         val values = ContentValues().apply {
             put(CalendarContract.Calendars.ACCOUNT_NAME, OWN_NAME)
-            put(CalendarContract.Calendars.ACCOUNT_TYPE, context.packageName)
+            put(CalendarContract.Calendars.ACCOUNT_TYPE, OWN_ACCOUNT_TYPE)
             put(CalendarContract.Calendars.NAME, OWN_NAME)
             put(CalendarContract.Calendars.CALENDAR_DISPLAY_NAME, OWN_NAME)
             put(CalendarContract.Calendars.CALENDAR_COLOR, OWN_COLOR)
@@ -266,8 +288,8 @@ class CalendarSync(private val context: Context, private val settings: SettingsS
                 CalendarContract.Calendars.CALENDAR_DISPLAY_NAME,
                 CalendarContract.Calendars.CALENDAR_ACCESS_LEVEL,
             ),
-            "${CalendarContract.Calendars.ACCOUNT_TYPE} = ?",
-            arrayOf(context.packageName),
+            "${CalendarContract.Calendars.ACCOUNT_TYPE} = ? AND ${CalendarContract.Calendars.ACCOUNT_NAME} = ?",
+            arrayOf(OWN_ACCOUNT_TYPE, OWN_NAME),
             null,
         )?.use { cursor ->
             if (cursor.moveToFirst()) {
@@ -278,10 +300,43 @@ class CalendarSync(private val context: Context, private val settings: SettingsS
         }
     }.getOrNull()
 
-    private fun syncAdapterUri(base: Uri): Uri = base.buildUpon()
+    /** 旧版按包名当账户类型建的那些日历，删干净（连带事件），免得日历里多出一份重复的。 */
+    private fun removeLegacyCalendars(): Int {
+        val ids = mutableListOf<Long>()
+        runCatching {
+            resolver.query(
+                CalendarContract.Calendars.CONTENT_URI,
+                arrayOf(CalendarContract.Calendars._ID),
+                "${CalendarContract.Calendars.ACCOUNT_TYPE} = ?",
+                arrayOf(context.packageName),
+                null,
+            )?.use { cursor -> while (cursor.moveToNext()) ids += cursor.getLong(0) }
+        }
+        var removed = 0
+        ids.forEach { id ->
+            val args = arrayOf(id.toString())
+            runCatching {
+                resolver.delete(legacyEventsUri(), "${CalendarContract.Events.CALENDAR_ID} = ?", args)
+            }
+            runCatching {
+                resolver.delete(legacyCalendarsUri(), "${CalendarContract.Calendars._ID} = ?", args)
+            }.onSuccess { removed += it }
+        }
+        return removed
+    }
+
+    private fun legacyEventsUri(): Uri = syncAdapterUri(CalendarContract.Events.CONTENT_URI, accountType = context.packageName)
+
+    private fun legacyCalendarsUri(): Uri = syncAdapterUri(CalendarContract.Calendars.CONTENT_URI, accountType = context.packageName)
+
+    private fun syncAdapterUri(
+        base: Uri,
+        accountName: String = OWN_NAME,
+        accountType: String = OWN_ACCOUNT_TYPE,
+    ): Uri = base.buildUpon()
         .appendQueryParameter(CalendarContract.CALLER_IS_SYNCADAPTER, "true")
-        .appendQueryParameter(CalendarContract.Calendars.ACCOUNT_NAME, OWN_NAME)
-        .appendQueryParameter(CalendarContract.Calendars.ACCOUNT_TYPE, context.packageName)
+        .appendQueryParameter(CalendarContract.Calendars.ACCOUNT_NAME, accountName)
+        .appendQueryParameter(CalendarContract.Calendars.ACCOUNT_TYPE, accountType)
         .build()
 
     /**
@@ -336,6 +391,7 @@ class CalendarSync(private val context: Context, private val settings: SettingsS
     private companion object {
         const val DURATION_MS = 30 * 60 * 1000L
         const val OWN_NAME = "分期管家"
+        const val OWN_ACCOUNT_TYPE = CalendarContract.ACCOUNT_TYPE_LOCAL
         const val OWN_COLOR = 0xFF2F6B4F.toInt()
         val CUSTOM_SELECTION = "${CalendarContract.Events.CUSTOM_APP_URI} LIKE ?"
         val OURS_ONLY = arrayOf("${CalendarPlan.SCHEME}%")
