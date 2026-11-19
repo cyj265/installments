@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  系统级备份规则（Android 11 及以下 / adb backup）。
+
+  分期数据（files/loans.json）允许备份，换机时用户的账目不丢；
+  但 fq_settings.xml 里存着识别服务的 API Key，必须排除——
+  否则一次云备份或 adb backup 就会把 Key 带出本机，和"Key 只落本机"的约定冲突。
+-->
+<full-backup-content>
+    <exclude
+        domain="sharedpref"
+        path="fq_settings.xml" />
+</full-backup-content>

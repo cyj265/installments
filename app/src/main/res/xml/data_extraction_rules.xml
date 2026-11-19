@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  设备到设备 / 云备份规则（Android 12+）。
+
+  与 backup_rules.xml 同样的原则：账目数据可备份，API Key 不可备份。
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude
+            domain="sharedpref"
+            path="fq_settings.xml" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude
+            domain="sharedpref"
+            path="fq_settings.xml" />
+    </device-transfer>
+</data-extraction-rules>

@@ -346,6 +346,12 @@ fun SettingsScreen(
             SectionTitle("识别服务", if (ready) "已就绪" else "未就绪")
             SettingsField("接口地址", baseUrl, onValueChange = { baseUrl = it; viewModel.settings.baseUrl = it })
             SettingsField("模型", model, onValueChange = { model = it; viewModel.settings.model = it })
+            ActionRow(
+                "检测连接",
+                if (state.busy) "正在检测…" else "用当前地址、模型和 Key 发一条测试请求",
+                enabled = !state.busy && ready,
+                onClick = { viewModel.testConnection() },
+            )
             SettingsField(
                 label = "API Key",
                 value = apiKey,
@@ -469,9 +475,9 @@ private fun SettingText(label: String, value: String) {
 }
 
 @Composable
-private fun ActionRow(label: String, hint: String, onClick: () -> Unit, trailing: (@Composable () -> Unit)? = null) {
+private fun ActionRow(label: String, hint: String, onClick: () -> Unit, trailing: (@Composable () -> Unit)? = null, enabled: Boolean = true) {
     val fq = LocalFqColors.current
-    Column(modifier = Modifier.fillMaxWidth().clickable(onClick = onClick)) {
+    Column(modifier = Modifier.fillMaxWidth().clickable(enabled = enabled, onClick = onClick)) {
         DividerLine()
         Row(
             modifier = Modifier.fillMaxWidth().padding(vertical = 10.dp),

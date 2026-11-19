@@ -26,6 +26,15 @@ class SettingsStore(context: Context) {
 
     private val prefs = context.applicationContext.getSharedPreferences("fq_settings", Context.MODE_PRIVATE)
 
+    init {
+        // 迁移：老版本存下的模型若在魔搭已下架或需单独授权（会对旧 Key 报 401/token expired），
+        // 覆盖安装后自动换成当前可用的视觉模型，否则用户留着旧设置照样识别不了。
+        val saved = prefs.getString(KEY_MODEL, "").orEmpty()
+        if (saved in RETIRED_MODELS) {
+            prefs.edit().putString(KEY_MODEL, DEFAULT_MODEL).apply()
+        }
+    }
+
     var apiKey: String
         get() = prefs.getString(KEY_API_KEY, "").orEmpty()
         set(value) {
@@ -69,7 +78,14 @@ class SettingsStore(context: Context) {
 
     companion object {
         const val DEFAULT_BASE_URL = "https://api-inference.modelscope.cn/v1"
-        const val DEFAULT_MODEL = "Qwen/Qwen2.5-VL-72B-Instruct"
+        // Qwen2.5-VL-72B 已从魔搭 API-Inference 下架（2026-11 列表已无此模型），继续用会报错。
+        // Qwen3.5-35B-A3B 是当前在架的视觉多模态模型，中文 OCR 与结构化抽取强、体量适中速度快。
+        const val DEFAULT_MODEL = "Qwen/Qwen3.5-35B-A3B"
+        /** 已下架或对普通免费 Key 报 401 的旧模型，启动时迁移掉。 */
+        private val RETIRED_MODELS = setOf(
+            "Qwen/Qwen2.5-VL-72B-Instruct",
+            "OpenGVLab/InternVL3_5-241B-A28B",
+        )
         private const val KEY_API_KEY = "apiKey"
         private const val KEY_BASE_URL = "baseUrl"
         private const val KEY_MODEL = "model"
@@ -111,9 +127,72 @@ class VisionRecognizer(private val settings: SettingsStore) {
             val code = conn.responseCode
             val text = (if (code in 200..299) conn.inputStream else conn.errorStream).use { it.readBytes() }.toString(Charsets.UTF_8)
             if (code !in 200..299) {
-                throw RecognitionException("识别服务返回 $code：${text.take(200)}")
+                throw RecognitionException(friendlyError(code, text))
             }
             extractContent(text)
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    /**
+     * 把服务端的错误翻成人能照着做的中文提示。原来直接截 200 字 JSON，
+     * 用户只看到「识别服务返回 401：Authentication failed」，不知道是该换 Key 还是换模型。
+     */
+    private fun friendlyError(code: Int, body: String): String {
+        val upstream = runCatching {
+            lenientJson.parseToJsonElement(body).jsonObject["error"]?.jsonObject?.get("message")?.jsonPrimitive?.content
+        }.getOrNull()?.take(160).orEmpty()
+        return when (code) {
+            401, 403 -> "Key 没通过验证（$code）。到魔搭「我的 → 访问令牌」确认 Key 没复制错、没带空格、没过期；" +
+                "还要先绑定阿里云账号并完成实名认证，否则 API-Inference 会拒绝调用。" +
+                (if (upstream.isNotBlank()) "\n服务原话：$upstream" else "")
+            404 -> "模型不存在或已下架（404）。当前填的模型「${settings.model}」可能已从魔搭下架，" +
+                "到「我的」页把模型换成还在架的（如 Qwen/Qwen3.5-35B-A3B）。" +
+                (if (upstream.isNotBlank()) "\n服务原话：$upstream" else "")
+            429 -> "调用太频繁或今日额度用完（429）。魔搭免费额度是每天 2000 次、单模型每天约 200 次，" +
+                "等一会儿或换个模型再试。"
+            in 500..599 -> "识别服务暂时故障（$code），不是你这边的问题，稍后重试。" +
+                (if (upstream.isNotBlank()) "\n服务原话：$upstream" else "")
+            else -> "识别服务返回 $code" + (if (upstream.isNotBlank()) "：$upstream" else "：${body.take(160)}")
+        }
+    }
+
+    /**
+     * 最小连通性检测：发一条纯文本请求，只验证 Key 与模型是否可用，不跑完整的截图 prompt。
+     * 返回成功提示或抛 [RecognitionException]（带 [friendlyError] 的中文说明）。
+     */
+    suspend fun testConnection(): String = withContext(Dispatchers.IO) {
+        if (!settings.recognizerReady) {
+            throw RecognitionException("接口地址、模型、API Key 三项都要填，才能检测")
+        }
+        val body = buildJsonObject {
+            put("model", settings.model)
+            put("max_tokens", 8)
+            putJsonArray("messages") {
+                add(buildJsonObject {
+                    put("role", "user")
+                    put("content", "回复 ok")
+                })
+            }
+        }.toString()
+        val conn = URL(settings.baseUrl + "/chat/completions").openConnection() as HttpURLConnection
+        try {
+            conn.requestMethod = "POST"
+            conn.connectTimeout = 15_000
+            conn.readTimeout = 30_000
+            conn.doOutput = true
+            conn.setRequestProperty("Content-Type", "application/json")
+            conn.setRequestProperty("Authorization", "Bearer ${settings.apiKey}")
+            conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+            val code = conn.responseCode
+            val text = (if (code in 200..299) conn.inputStream else conn.errorStream).use { it.readBytes() }.toString(Charsets.UTF_8)
+            if (code !in 200..299) throw RecognitionException(friendlyError(code, text))
+            // 能解析出 choices 即视为连通
+            runCatching { lenientJson.parseToJsonElement(text).jsonObject["choices"] }
+                .getOrNull()
+                ?: throw RecognitionException("服务有响应但看不懂：${text.take(160)}")
+            "连通正常，Key 和模型「${settings.model}」都可用"
         } finally {
             conn.disconnect()
         }
@@ -122,9 +201,20 @@ class VisionRecognizer(private val settings: SettingsStore) {
     private fun extractContent(responseBody: String): String {
         val root = runCatching { lenientJson.parseToJsonElement(responseBody) }.getOrNull()
             ?: throw RecognitionException("识别服务的回答不是可读的 JSON（可能被限流或返回了 HTML）")
-        val element = runCatching { root.jsonObject["choices"]!!.jsonArray[0].jsonObject["message"]!!.jsonObject["content"] }
+        val message = runCatching { root.jsonObject["choices"]!!.jsonArray[0].jsonObject["message"]!!.jsonObject }
             .getOrNull() ?: throw RecognitionException("识别服务没有返回内容：${responseBody.take(200)}")
-        return element.jsonPrimitive.content
+        // 关了 thinking 正常不会有 <think> 段，但换模型/服务端忽略参数时仍可能出现：
+        // 有的实现把思考塞进 content，有的放 reasoning_content。content 为空时退回 reasoning 之后的部分。
+        var content = message["content"]?.jsonPrimitive?.content.orEmpty()
+        if (content.isBlank()) {
+            content = message["reasoning_content"]?.jsonPrimitive?.content.orEmpty()
+        }
+        // 剥掉 <think>...</think>（含未闭合的 <think> 开头），只留真正的回答
+        val stripped = THINK_BLOCK.replace(content, "").replace("<think>", "", ignoreCase = true).trim()
+        if (stripped.isBlank()) {
+            throw RecognitionException("识别服务只返回了思考过程、没有结果。可到「我的」页点「检测连接」确认模型状态")
+        }
+        return stripped
     }
 
     private fun buildRequestBody(jpegs: List<ByteArray>): String {
@@ -134,6 +224,10 @@ class VisionRecognizer(private val settings: SettingsStore) {
             // 多图意味着可能一次吐出好几条记录，不显式给足长度的话，端点默认值会把 JSON 截断在半路；
             // 逐期计划一条就是十几行，12 期 + 本金/利息轻松过 2K，得按 4K 给
             put("max_tokens", 4096)
+            // Qwen3.5/3.8 是思考型模型，默认先吐几千字 <think> 再给答案：既慢又会吃掉 max_tokens
+            // 把 JSON 截断在半路。抄字段这种机械活不需要思考，显式关掉；只对这两个系列加，
+            // 免得换成智谱 GLM、DeepSeek 等不认这个参数的模型时报错。
+            if (isThinkingModel(settings.model)) put("enable_thinking", false)
             putJsonArray("messages") {
                 add(
                     buildJsonObject {
@@ -196,7 +290,16 @@ class VisionRecognizer(private val settings: SettingsStore) {
         return minOf(byShort, TALL_MAX_LONG_EDGE / longEdge)
     }
 
+    /** 模型名是否属于默认开思考的 Qwen 系列；只有这些才需要显式关 thinking。 */
+    private fun isThinkingModel(model: String): Boolean {
+        val m = model.lowercase()
+        return "qwen3.5" in m || "qwen3.8" in m
+    }
+
     companion object {
+        /** 匹配 <think>...</think> 整段（跨行、忽略大小写），用来从回答里剥掉思考过程。 */
+        private val THINK_BLOCK = Regex("<think>[\\s\\S]*?</think>", RegexOption.IGNORE_CASE)
+
         const val MAX_EDGE = 1280
         private const val JPEG_QUALITY = 82
         private const val TALL_JPEG_QUALITY = 86
@@ -213,7 +316,9 @@ class VisionRecognizer(private val settings: SettingsStore) {
          */
         val PROMPT: String = BASE_PROMPT + "\n\n平台对照表：\n" + Platforms.promptTable()
 
-        private const val BASE_PROMPT = """你是分期还款台账录入员。只看这些截图上明确出现的内容，把它们抄成 JSON，不要推测、不要计算、不要补全截图上没有的数字。只有规则 11、12 列出的推算例外。
+        private const val BASE_PROMPT = """输出要求（最重要）：你的回答只能是一个 JSON 对象，从第一个字符到最后一个字符都是 JSON。不要写任何解释、开场白、总结，不要输出思考过程或推理文字，不要用 ``` 代码块包裹。看不清、截图上没有的字段一律填 JSON 的 null，不要编、不要留空字符串、不要写"未知"。
+
+你是分期还款台账录入员。只看这些截图上明确出现的内容，把它们抄成 JSON，不要推测、不要计算、不要补全截图上没有的数字。只有规则 11、12 列出的推算例外。
 
 只输出一个 JSON 对象，形如：
 {"records":[{"institution":"支付宝花呗","loanNo":"****3271","totalPeriods":12,"currentPeriod":5,"remainingPeriods":8,"perPeriodAmount":"680.00","principalTotal":"8160.00","principalOutstanding":"4760.00","tradeDate":"2026-08-25","statementDay":15,"dueDayOfMonth":28,"nextDueDate":"2026-10-28","paidPeriods":[1,2,3,4],"note":"截图原文里的备注"}]}

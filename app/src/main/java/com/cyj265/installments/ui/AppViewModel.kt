@@ -173,6 +173,16 @@ class AppViewModel(
         }
     }
 
+    /** 检测识别服务的 Key 与模型是否可用，结果用 toast 显示。 */
+    fun testConnection() {
+        viewModelScope.launch {
+            _state.value = _state.value.copy(busy = true, toast = "正在检测…")
+            runCatching { recognizer.testConnection() }
+                .onSuccess { _state.value = _state.value.copy(busy = false, toast = it) }
+                .onFailure { _state.value = _state.value.copy(busy = false, toast = it.message ?: "检测失败") }
+        }
+    }
+
     /**
      * 确认页入库一条草稿。返回 false 表示还有 ERROR 没解决，界面应留在确认页。
      * [forceNew] 是用户在"疑似重复"横幅上选「仍要新建」，此时跳过合并。
